@@ -1,0 +1,97 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: pixal3d-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - pixal3d-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  pixal3d-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pixal3d-api
+    ports:
+      - "8081:8081"
+    environment:
+      # Redis Configuration
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REQUIRE_REDIS=${REQUIRE_REDIS:-true}
+      - STATUS_TTL=${STATUS_TTL:-7200}
+      
+      # API Configuration
+      - MAX_IMAGE_SIZE=${MAX_IMAGE_SIZE:-4194304}
+      - GENERATION_TIMEOUT_SECONDS=${GENERATION_TIMEOUT_SECONDS:-1800}
+      
+      # Google Cloud Storage (inject at runtime only)
+      - GOOGLE_CLOUD_STORAGE_BUCKET=${GOOGLE_CLOUD_STORAGE_BUCKET:-}
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
+
+      # GPUs
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+      # Huggingface
+      - HF_HOME=/root/.cache/huggingface
+      - HUGGINGFACE_HUB_TOKEN=${HUGGINGFACE_HUB_TOKEN}
+      - HF_TOKEN=${HUGGINGFACE_HUB_TOKEN}
+    
+    volumes:
+      - cache-data:/app/gradio_cache
+      - models-data:/root/.cache/huggingface
+    
+    networks:
+      - pixal3d-network
+    
+    depends_on:
+      redis:
+        condition: service_healthy
+    
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    
+    restart: unless-stopped
+    
+    command: >
+      python app.py
+      --host=0.0.0.0
+      --port=8081
+      --cache-path=/app/gradio_cache
+
+volumes:
+  redis-data:
+    driver: local
+  cache-data:
+    driver: local
+  models-data:
+    driver: local
+
+networks:
+  pixal3d-network:
+    driver: bridge

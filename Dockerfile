@@ -1,0 +1,144 @@
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+
+LABEL name="pixal3d-api" \
+      maintainer="pixal3d-api" \
+      description="TRELLIS.2 API Server with CUDA support"
+
+# Set working directory
+WORKDIR /app
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    CUDA_HOME=/usr/local/cuda \
+    CUDA_PATH=/usr/local/cuda \
+    PATH=/usr/local/cuda/bin:${PATH} \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH} \
+    TORCH_CUDA_ARCH_LIST="6.0;6.1;7.0;7.5;8.0;8.6;8.9;9.0" \
+    PYOPENGL_PLATFORM=egl \
+    OPENCV_IO_ENABLE_OPENEXR=1 \
+    CUDA_MODULE_LOADING=LAZY \
+    PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:512"
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Build essentials
+    build-essential \
+    cmake \
+    ninja-build \
+    pkg-config \
+    # Python
+    python3.10 \
+    python3.10-dev \
+    python3-pip \
+    python3-setuptools \
+    python3-wheel \
+    # Graphics & OpenGL
+    libglvnd0 \
+    libgl1 \
+    libglx0 \
+    libegl1 \
+    libgles2 \
+    libglvnd-dev \
+    libgl1-mesa-dev \
+    libegl1-mesa-dev \
+    libgles2-mesa-dev \
+    mesa-utils-extra \
+    # X11 & rendering
+    libxrender1 \
+    libxrender-dev \
+    libxi6 \
+    libxext6 \
+    libsm6 \
+    libxkbcommon-x11-0 \
+    libgconf-2-4 \
+    # Additional libraries
+    libglib2.0-0 \
+    libeigen3-dev \
+    libjpeg-dev \
+    libwebp-dev \
+    # Utilities
+    git \
+    git-lfs \
+    wget \
+    curl \
+    unzip \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python3 \
+    && pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install PyTorch with CUDA 12.4 support
+RUN pip install --no-cache-dir \
+    torch==2.6.0 \
+    torchvision==0.21.0 \
+    --index-url https://download.pytorch.org/whl/cu124
+
+# Install basic dependencies
+RUN pip install --no-cache-dir \
+    imageio imageio-ffmpeg tqdm easydict opencv-python-headless ninja trimesh \
+    transformers==4.57.6 gradio==6.0.1 tensorboard pandas lpips zstandard \
+    git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8 \
+    kornia timm
+RUN pip install --no-cache-dir pillow-simd
+
+# Install flash-attention with parallel compilation
+RUN MAX_JOBS=4 pip install flash-attn==2.7.3 --no-build-isolation --no-cache-dir
+
+# Install nvdiffrast
+RUN mkdir -p /tmp/extensions && \
+    git clone -b v0.4.0 https://github.com/NVlabs/nvdiffrast.git /tmp/extensions/nvdiffrast && \
+    pip install --no-cache-dir /tmp/extensions/nvdiffrast --no-build-isolation && \
+    rm -rf /tmp/extensions/nvdiffrast
+
+# Install nvdiffrec
+RUN mkdir -p /tmp/extensions && \
+    git clone -b renderutils https://github.com/JeffreyXiang/nvdiffrec.git /tmp/extensions/nvdiffrec && \
+    pip install --no-cache-dir /tmp/extensions/nvdiffrec --no-build-isolation && \
+    rm -rf /tmp/extensions/nvdiffrec
+
+# Install CuMesh with parallel compilation
+RUN mkdir -p /tmp/extensions && \
+    git clone https://github.com/JeffreyXiang/CuMesh.git /tmp/extensions/CuMesh --recursive && \
+    MAX_JOBS=4 pip install --no-cache-dir /tmp/extensions/CuMesh --no-build-isolation && \
+    rm -rf /tmp/extensions/CuMesh
+
+# Install FlexGEMM
+RUN mkdir -p /tmp/extensions && \
+    git clone https://github.com/JeffreyXiang/FlexGEMM.git /tmp/extensions/FlexGEMM --recursive && \
+    pip install --no-cache-dir /tmp/extensions/FlexGEMM --no-build-isolation && \
+    rm -rf /tmp/extensions/FlexGEMM
+
+# Install o-voxel
+COPY o-voxel /app/o-voxel
+RUN MAX_JOBS=4 pip install --no-cache-dir /app/o-voxel --no-build-isolation
+
+# Install Python dependencies
+COPY requirements-api.txt /app/
+RUN pip install --no-cache-dir -r requirements-api.txt
+
+COPY . /app/
+
+# Create cache directory
+RUN mkdir -p /app/gradio_cache
+
+# Expose API port
+EXPOSE 8081
+
+# Runtime environment variables (non-sensitive defaults)
+ENV MAX_IMAGE_SIZE=8388608 \
+    REQUIRE_REDIS=true \
+    STATUS_TTL=7200 \
+    GENERATION_TIMEOUT_SECONDS=3600 \
+    REDIS_HOST=localhost \
+    REDIS_PORT=6379 \
+    REDIS_DB=0
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:8081/health || exit 1
+
+# Default command
+CMD ["python", "main.py", "--host=0.0.0.0", "--port=8081", "--cache-path=/app/gradio_cache"]

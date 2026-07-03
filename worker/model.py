@@ -1,0 +1,205 @@
+"""Model worker for Pixal3D generation tasks."""
+
+import gc
+import os
+import time
+import uuid
+
+from PIL import Image
+
+import torch
+
+import o_voxel
+import numpy as np
+
+from pixal3d.pipelines import Pixal3DImageTo3DPipeline
+from pixal3d.utils.render_utils import get_camera_params_wild_moge
+from utilities.image import convert_to_pil_image
+from utilities.logger import get_logger
+from utilities.gpu import aggressive_gpu_cleanup
+
+
+# Minimal mocks for IMAGE_COND_CONFIGS
+IMAGE_COND_CONFIGS = {
+    'ss': {'model_name': 'camenduru/dinov3-vitl16-pretrain-lvd1689m', 'image_size': 512, 'grid_resolution': 16},
+    'shape_512': {'model_name': 'camenduru/dinov3-vitl16-pretrain-lvd1689m', 'image_size': 512, 'grid_resolution': 32, 'use_naf_upsample': True, 'naf_target_size': 512},
+    'shape_1024': {'model_name': 'camenduru/dinov3-vitl16-pretrain-lvd1689m', 'image_size': 1024, 'grid_resolution': 64, 'use_naf_upsample': True, 'naf_target_size': 512},
+    'tex_1024': {'model_name': 'camenduru/dinov3-vitl16-pretrain-lvd1689m', 'image_size': 1024, 'grid_resolution': 64, 'use_naf_upsample': True, 'naf_target_size': 1024},
+}
+WILD_MESH_SCALE = 1.0
+WILD_EXTEND_PIXEL = 0
+WILD_IMAGE_RESOLUTION = 512
+
+def build_image_cond_model(config):
+    from pixal3d.trainers.flow_matching.mixins.image_conditioned_proj import DinoV3ProjFeatureExtractor
+    model = DinoV3ProjFeatureExtractor(**config)
+    model.eval()
+    return model
+
+def load_moge_model(device='cuda', model_name='Ruicheng/moge-2-vitl'):
+    from moge.model.v2 import MoGeModel
+    moge_model = MoGeModel.from_pretrained(model_name).to(device)
+    moge_model.eval()
+    return moge_model
+
+
+class ModelWorker:
+    def __init__(self, model_path='TencentARC/Pixal3D', device='cuda', worker_id=None, save_dir='gradio_cache'):
+        self.model_path = model_path
+        self.worker_id = worker_id or str(uuid.uuid4())[:6]
+        self.device = device
+        self.save_dir = save_dir
+        self.request_count = 0
+
+        self.logger = get_logger(self.worker_id)
+        self.logger.info(f'Loading model {model_path} on worker {self.worker_id}')
+
+        torch.backends.cudnn.benchmark = True
+
+        self.pipeline = Pixal3DImageTo3DPipeline.from_pretrained(model_path)
+        
+        self.logger.info('Building DinoV3ProjFeatureExtractor models...')
+        self.pipeline.image_cond_model_ss = build_image_cond_model(IMAGE_COND_CONFIGS['ss'])
+        self.pipeline.image_cond_model_shape_512 = build_image_cond_model(IMAGE_COND_CONFIGS['shape_512'])
+        self.pipeline.image_cond_model_shape_1024 = build_image_cond_model(IMAGE_COND_CONFIGS['shape_1024'])
+        self.pipeline.image_cond_model_tex_1024 = build_image_cond_model(IMAGE_COND_CONFIGS['tex_1024'])
+        
+        self.pipeline.low_vram = False
+        self.pipeline.cuda()
+        self.pipeline.image_cond_model_ss.cuda()
+        self.pipeline.image_cond_model_shape_512.cuda()
+        self.pipeline.image_cond_model_shape_1024.cuda()
+        self.pipeline.image_cond_model_tex_1024.cuda()
+        
+        self.logger.info('Pre-loading NAF upsampler model...')
+        for attr in ['image_cond_model_ss', 'image_cond_model_shape_512',
+                     'image_cond_model_shape_1024', 'image_cond_model_tex_1024']:
+            m = getattr(self.pipeline, attr, None)
+            if m is not None and getattr(m, 'use_naf_upsample', False):
+                m._load_naf()
+
+        self.logger.info('Loading MoGe-2 for camera estimation (CPU)...')
+        self.moge_model = load_moge_model(device='cpu')
+
+        os.environ.setdefault('ATTN_BACKEND', 'flash_attn_3')
+
+        self.logger.info('Worker initialization complete.')
+        aggressive_gpu_cleanup()
+
+    def generate(self, uid: str, params: dict) -> str:
+        image_payload = params.get("image")
+        seed = params.get("seed", 42)
+        mode = params.get("mode", "staged")
+        
+        # Hardcode resolution to 1536 for best quality as requested
+        resolution = 1536
+        decimation_target = params.get("decimation_target", 500000)
+        texture_size = params.get("texture_size", 2048)
+        
+        ss_sampler_params = {
+            'steps': params.get("ss_sampling_steps", 12),
+            'guidance_strength': params.get("ss_guidance_strength", 7.5),
+            'guidance_rescale': params.get("ss_guidance_rescale", 0.7),
+            'rescale_t': params.get("ss_rescale_t", 5.0)
+        }
+        shape_sampler_params = {
+            'steps': params.get("shape_slat_sampling_steps", 12),
+            'guidance_strength': params.get("shape_slat_guidance_strength", 7.5),
+            'guidance_rescale': params.get("shape_slat_guidance_rescale", 0.5),
+            'rescale_t': params.get("shape_slat_rescale_t", 3.0)
+        }
+        tex_sampler_params = {
+            'steps': params.get("tex_slat_sampling_steps", 12),
+            'guidance_strength': params.get("tex_slat_guidance_strength", 1.0),
+            'guidance_rescale': params.get("tex_slat_guidance_rescale", 0.0),
+            'rescale_t': params.get("tex_slat_rescale_t", 3.0)
+        }
+        
+        pipeline_type = f"{resolution}_cascade"
+
+        self.logger.info(f'Task {uid}: processing {mode} with resolution {resolution}')
+        start_time = time.time()
+        self.request_count += 1
+        
+        if self.request_count % 10 == 0:
+            torch.cuda.empty_cache()
+
+        image = convert_to_pil_image(image_payload)
+        image = self.pipeline.preprocess_image(image)
+        
+        temp_path = os.path.join(self.save_dir, f'{uid}_temp.png')
+        image.save(temp_path)
+        
+        # Load moge to GPU temporarily
+        self.moge_model.to('cuda')
+        camera_params = get_camera_params_wild_moge(
+            temp_path, device='cuda',
+            mesh_scale=WILD_MESH_SCALE, extend_pixel=WILD_EXTEND_PIXEL,
+            image_resolution=WILD_IMAGE_RESOLUTION,
+            moge_model=self.moge_model
+        )
+        # Unload back to CPU to save memory for pipeline
+        self.moge_model.cpu()
+        os.remove(temp_path)
+
+        outputs, _ = self.pipeline.run(
+            image,
+            camera_params=camera_params,
+            seed=seed,
+            preprocess_image=False,
+            sparse_structure_sampler_params=ss_sampler_params,
+            shape_slat_sampler_params=shape_sampler_params,
+            tex_slat_sampler_params=tex_sampler_params,
+            pipeline_type=pipeline_type,
+            verbose=False,
+        )
+        
+        mesh = outputs[0]
+
+        try:
+            glb = o_voxel.postprocess.to_glb(
+                vertices=mesh.vertices, faces=mesh.faces, attr_volume=mesh.attrs,
+                coords=mesh.coords, attr_layout=self.pipeline.pbr_attr_layout,
+                grid_size=1024 if resolution >= 1024 else 512, 
+                aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+                decimation_target=decimation_target, texture_size=texture_size,
+                remesh=True, remesh_band=1, remesh_project=0, use_tqdm=False,
+            )
+        except RuntimeError as exc:
+            exc_str = str(exc).lower()
+            if "out of memory" in exc_str or "cuda error" in exc_str:
+                self.logger.warning(
+                    f"OOM during to_glb remesh for uid={uid} "
+                    f"({mesh.faces.shape[0]:,} faces); "
+                    f"retrying without remesh"
+                )
+
+                # Clean up GPU memory before retrying the export.
+                aggressive_gpu_cleanup()
+
+                glb = o_voxel.postprocess.to_glb(
+                    vertices=mesh.vertices, faces=mesh.faces, attr_volume=mesh.attrs,
+                    coords=mesh.coords, attr_layout=self.pipeline.pbr_attr_layout,
+                    grid_size=1024 if resolution >= 1024 else 512, 
+                    aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+                    decimation_target=decimation_target, texture_size=texture_size,
+                    remesh=False, remesh_band=1, remesh_project=0, use_tqdm=False,
+                )
+        
+        rot = np.array([
+            [-1,  0,  0,  0],
+            [ 0,  0, -1,  0],
+            [ 0, -1,  0,  0],
+            [ 0,  0,  0,  1],
+        ], dtype=np.float64)
+        glb.apply_transform(rot)
+
+        output_path = os.path.join(self.save_dir, f'{uid}.glb')
+        glb.export(output_path, extension_webp=True)
+
+        end_time = time.time()
+        self.logger.info(f'Task {uid}: generation completed in {end_time - start_time:.2f} seconds.')
+        
+        aggressive_gpu_cleanup()
+
+        return output_path
