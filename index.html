@@ -1,0 +1,1939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pixal3D | AI Image-to-3D</title>
+    
+    <!-- Fonts & Icons -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="./assets/app/lucide.min.js"></script>
+    <script type="module" src="./assets/app/model-viewer.min.js"></script>
+    
+    <style>
+        :root {
+            --primary: #a855f7;
+            --primary-dark: #7c3aed;
+            --primary-glow: rgba(168, 85, 247, 0.35);
+            --accent: #f43f5e;
+            --accent-glow: rgba(244, 63, 94, 0.3);
+            --bg: #030712;
+            --surface: #0b0f19;
+            --surface-light: #161f30;
+            --border: rgba(168, 85, 247, 0.12);
+            --border-hover: rgba(244, 63, 94, 0.4);
+            --text: #f8fafc;
+            --text-dim: #94a3b8;
+            --glass: rgba(11, 15, 25, 0.85);
+            --radius-lg: 16px;
+            --radius-md: 12px;
+            --radius-sm: 6px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+            background: 
+                radial-gradient(circle at 10% 15%, rgba(139, 92, 246, 0.12) 0%, transparent 40%),
+                radial-gradient(circle at 90% 85%, rgba(244, 63, 94, 0.1) 0%, transparent 40%);
+        }
+
+        /* Top Navigation / Steps */
+        .app-shell {
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        .sidebar {
+            width: 310px;
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            padding: 1.25rem;
+            overflow-y: auto;
+            z-index: 10;
+            scrollbar-width: thin;
+        }
+
+        .main-content {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            background: rgba(3, 7, 18, 0.5);
+        }
+
+        header {
+            padding: 1.25rem 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+            background: var(--glass);
+            backdrop-filter: blur(24px);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-family: 'Outfit', sans-serif;
+            font-weight: 800;
+            font-size: 1.5rem;
+            background: linear-gradient(135deg, #fff 0%, #d8b4fe 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .logo i {
+            color: var(--primary);
+            -webkit-text-fill-color: initial;
+            filter: drop-shadow(0 0 8px var(--primary-glow));
+        }
+
+        .steps-nav {
+            display: flex;
+            gap: 2.5rem;
+        }
+
+        .step-item {
+            display: flex;
+            align-items: center;
+            gap: 0.65rem;
+            font-size: 0.82rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            color: var(--text-dim);
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            cursor: pointer;
+            padding: 0.6rem 0;
+            border-bottom: 2.5px solid transparent;
+        }
+
+        .step-item:hover {
+            color: white;
+        }
+
+        .step-item.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+            text-shadow: 0 0 10px var(--primary-glow);
+        }
+
+        .step-item.completed {
+            color: var(--accent);
+            text-shadow: 0 0 10px var(--accent-glow);
+        }
+
+        /* Workspace Panels */
+        .workspace {
+            flex: 1;
+            padding: 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .panel {
+            width: 100%;
+            height: 100%;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            animation: fadeIn 0.4s ease-out;
+            position: relative;
+        }
+
+        .panel.active {
+            display: flex;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Upload Zone */
+        .upload-card {
+            width: 100%;
+            max-width: 600px;
+            aspect-ratio: 4/3;
+            background: rgba(11, 15, 25, 0.6);
+            border: 1px dashed var(--border);
+            border-radius: var(--radius-lg);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+        }
+
+        .upload-card:hover {
+            border-color: var(--accent);
+            background: rgba(139, 92, 246, 0.03);
+            box-shadow: 0 12px 40px var(--primary-glow);
+            transform: translateY(-2px);
+        }
+
+        .upload-card.disabled {
+            opacity: 0.5;
+            cursor: not-allowed !important;
+            pointer-events: none;
+            border-color: var(--border) !important;
+            box-shadow: none !important;
+            transform: none !important;
+        }
+
+        .upload-card img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: none;
+            border-radius: var(--radius-lg);
+        }
+
+        .upload-hint {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1.25rem;
+            color: var(--text-dim);
+            text-align: center;
+            padding: 2.5rem;
+            transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .upload-card:hover .upload-hint {
+            transform: translateY(-4px);
+        }
+
+        .upload-hint i {
+            width: 56px;
+            height: 56px;
+            color: var(--primary);
+            filter: drop-shadow(0 0 12px var(--primary-glow));
+        }
+
+        /* Result Viewers */
+        .viewer-wrapper {
+            width: 100%;
+            height: 100%;
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            background: radial-gradient(circle at 50% 50%, #0c0f1d 0%, #030712 100%);
+            position: relative;
+            box-shadow: 0 25px 60px rgba(0, 0, 0, 0.6);
+            border: 1px solid var(--border);
+        }
+
+        #frame-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+
+        .preview-frame {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: none;
+            transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .preview-frame.active {
+            display: block;
+        }
+
+        .viewer-overlay {
+            position: absolute;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(11, 15, 25, 0.8);
+            backdrop-filter: blur(20px);
+            padding: 0.85rem 1.75rem;
+            border-radius: 100px;
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+            width: 85%;
+            max-width: 600px;
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Model Viewer Customization */
+        model-viewer {
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at 50% 50%, #0c0f1d 0%, #030712 100%);
+        }
+
+        /* Sidebar Controls */
+        .sidebar-section {
+            margin-bottom: 2rem;
+        }
+
+        .sidebar-section h3 {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: var(--text-dim);
+            margin-bottom: 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            font-weight: 700;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+        }
+
+        .input-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 0.6rem;
+        }
+
+        .input-wrapper label {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: #e2e8f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .input-wrapper label span {
+            color: var(--primary);
+            font-family: monospace;
+            font-size: 0.8rem;
+        }
+
+        select, input[type="number"] {
+            background: #111524;
+            border: 1px solid var(--border);
+            color: white;
+            padding: 0.85rem 1rem;
+            border-radius: var(--radius-md);
+            width: 100%;
+            outline: none;
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            font-size: 0.85rem;
+            font-family: inherit;
+        }
+
+        select:hover, input[type="number"]:hover {
+            border-color: var(--border-hover);
+        }
+
+        select:focus, input[type="number"]:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.15);
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            height: 5px;
+            background: #111524;
+            border-radius: 100px;
+            margin: 12px 0;
+            width: 100%;
+            outline: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: var(--primary);
+            border-radius: 50%;
+            cursor: pointer;
+            border: 3.5px solid var(--surface);
+            box-shadow: 0 0 12px var(--primary-glow);
+            transition: transform 0.1s;
+        }
+
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.15);
+        }
+
+        /* Action Buttons */
+        .btn-stack {
+            margin-top: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.85rem;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 1rem 1.25rem;
+            border-radius: var(--radius-md);
+            font-weight: 700;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+            border: none;
+            font-family: inherit;
+            letter-spacing: 0.01em;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: white;
+            box-shadow: 0 8px 24px var(--primary-glow);
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 28px var(--primary-glow);
+            filter: brightness(1.1);
+        }
+
+        .btn-primary:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        .btn-primary:disabled {
+            background: #111524;
+            color: #475569;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text);
+        }
+
+        .btn-outline:hover {
+            background: rgba(168, 85, 247, 0.03);
+            border-color: var(--border-hover);
+        }
+
+        /* Mode Buttons */
+        .mode-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.5rem;
+        }
+
+        .mode-tab {
+            background: #111524;
+            border: 1px solid var(--border);
+            padding: 0.65rem 0.5rem;
+            border-radius: var(--radius-sm);
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            color: var(--text-dim);
+        }
+
+        .mode-tab:hover {
+            border-color: var(--border-hover);
+            color: white;
+        }
+
+        .mode-tab.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+            box-shadow: 0 4px 12px var(--primary-glow);
+        }
+
+        /* Gallery Sidebar */
+        .gallery-sidebar {
+            width: 320px;
+            background: var(--surface);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            padding: 1.25rem;
+            overflow-y: auto;
+            z-index: 10;
+            scrollbar-width: thin;
+        }
+
+        .gallery-sidebar h4 {
+            font-size: 0.72rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            margin-top: 1.5rem;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-weight: 800;
+        }
+
+        .gallery-sidebar h4:first-of-type {
+            margin-top: 0;
+        }
+
+        /* Examples Bottom Drawer */
+        .examples-drawer {
+            padding: 1rem 2rem;
+            border-top: 1px solid var(--border);
+            background: var(--surface);
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            overflow: hidden;
+            width: 100%;
+        }
+
+        .examples-drawer h4 {
+            font-size: 0.72rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-weight: 800;
+        }
+
+        .examples-grid {
+            display: flex;
+            flex-direction: row;
+            flex-wrap: nowrap;
+            gap: 1rem;
+            overflow-x: auto;
+            overflow-y: hidden;
+            padding-bottom: 0.5rem;
+            scrollbar-width: thin;
+        }
+
+        .gallery-item {
+            flex: 0 0 80px;
+            width: 80px;
+            aspect-ratio: 1/1;
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+            background: #111524;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+        }
+
+        .gallery-item:hover {
+            transform: translateY(-4px) scale(1.08);
+            border-color: var(--primary);
+            box-shadow: 0 10px 24px var(--primary-glow);
+        }
+
+        .gallery-item img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        /* Loading & Status */
+        .loading-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(3, 7, 18, 0.9);
+            z-index: 1000;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 2rem;
+            backdrop-filter: blur(16px);
+        }
+
+        .loader-ring {
+            width: 72px;
+            height: 72px;
+            border-radius: 50%;
+            border: 4px solid var(--border);
+            border-top-color: var(--primary);
+            animation: spin 0.8s cubic-bezier(0.5, 0.1, 0.5, 0.9) infinite;
+            box-shadow: 0 0 24px var(--primary-glow);
+        }
+
+        .loader-ring-mini {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: 1.5px solid var(--border);
+            border-top-color: var(--accent);
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+
+        .status-toast {
+            position: fixed;
+            bottom: 2.5rem;
+            right: 2.5rem;
+            background: var(--surface);
+            padding: 1.15rem 1.75rem;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--primary);
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+            display: none;
+            z-index: 2000;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: white;
+            animation: slideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes slideIn { from { transform: translateX(100%) scale(0.9); opacity: 0; } to { transform: translateX(0) scale(1); opacity: 1; } }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #1f2937; border-radius: 100px; }
+        ::-webkit-scrollbar-thumb:hover { background: #374151; }
+
+        /* Reference thumbnail in preview/result panels */
+        .ref-thumbnail {
+            position: absolute;
+            top: 1.5rem;
+            right: 1.5rem;
+            width: 140px;
+            height: 140px;
+            object-fit: cover;
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border);
+            z-index: 20;
+            display: none;
+            box-shadow: 0 10px 24px rgba(0,0,0,0.5);
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .ref-thumbnail:hover {
+            transform: scale(1.08) translateY(-2px);
+            border-color: var(--accent);
+            box-shadow: 0 14px 32px var(--accent-glow);
+        }
+
+        /* Lightbox */
+        .lightbox-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 3000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            cursor: zoom-out;
+            backdrop-filter: blur(10px);
+        }
+
+        .lightbox-overlay img {
+            max-width: 85%;
+            max-height: 85%;
+            border-radius: var(--radius-lg);
+            box-shadow: 0 25px 80px rgba(0,0,0,0.8);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* History items list */
+        .history-item {
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+            background: rgba(11, 15, 25, 0.6);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 0.75rem;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .history-item:hover {
+            background: rgba(168, 85, 247, 0.04);
+            border-color: var(--accent);
+            box-shadow: 0 10px 24px var(--accent-glow);
+            transform: translateY(-2px);
+        }
+
+        .history-thumb {
+            width: 52px;
+            height: 52px;
+            object-fit: cover;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .history-item:hover .history-thumb {
+            transform: scale(1.05);
+            border-color: var(--accent);
+        }
+
+    </style>
+</head>
+<body>
+
+    <div class="app-shell">
+        <!-- Left Sidebar: Controls -->
+        <div class="sidebar">
+            <div class="logo" style="margin-bottom: 2.5rem;">
+                <i data-lucide="sparkles"></i>
+                <span>Pixal3D</span>
+            </div>
+
+
+
+            <div class="sidebar-section">
+                <h3><i data-lucide="sliders-horizontal" style="width: 14px;"></i> Base Settings</h3>
+                <div class="control-group">
+                    <div class="input-wrapper">
+                        <label>Target Resolution</label>
+                        <select id="resolution">
+                            <option value="1024">1024 (Balanced)</option>
+                            <option value="1536">1536 (High Quality)</option>
+                        </select>
+                    </div>
+                    <div class="input-wrapper">
+                        <label>Generation Seed <span>#<span id="seed-display">42</span></span></label>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <input type="number" id="seed" value="42" style="flex: 1;">
+                            <button class="btn btn-outline" style="width: 50px; padding: 0;" onclick="randomizeSeed()">
+                                <i data-lucide="rotate-cw" style="width: 16px;"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="input-wrapper">
+                        <p style="font-size: 0.72rem; color: var(--text-dim); line-height: 1.5; opacity: 0.7;">
+                            Note: FOV is auto-estimated via MoGe-2.<br>
+                            If distortion occurs, try manual FOV.<br>
+                            Default <b style="color: var(--primary);">0.2 rad</b> generally works well.
+                        </p>
+                    </div>
+                    <div class="input-wrapper">
+                        <label>
+                            Camera FOV
+                            <span style="display: flex; align-items: center; gap: 0.35rem;">
+                                <input type="checkbox" id="fov-auto" checked style="accent-color: var(--primary); width: 14px; height: 14px; cursor: pointer;">
+                                <span style="font-size: 0.75rem; color: var(--text-dim); cursor: pointer;" onclick="document.getElementById('fov-auto').click()">Auto</span>
+                            </span>
+                        </label>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <input type="number" id="manual-fov" value="0.2" min="0.0175" max="2.9671" step="0.01" disabled style="opacity: 0.4; flex: 1;">
+                            <select id="fov-unit" disabled style="opacity: 0.4; width: 70px; padding: 0.5rem;">
+                                <option value="deg">deg</option>
+                                <option value="rad" selected>rad</option>
+                            </select>
+                        </div>
+                        <p id="fov-hint" style="font-size: 0.65rem; color: var(--text-dim); margin-top: 0.15rem;">
+                            Manual FOV in radians (0.02–2.97 rad)
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar-section" id="render-controls" style="display: none;">
+                <h3><i data-lucide="palette" style="width: 14px;"></i> Render Mode For Preview</h3>
+                <div class="mode-grid" id="mode-grid">
+                    <!-- Tabs injected via JS -->
+                </div>
+            </div>
+
+
+
+            <div class="sidebar-section">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; cursor: pointer;" onclick="toggleAdvanced()">
+                    <h3 style="margin-bottom: 0;"><i data-lucide="shield-alert" style="width: 14px;"></i> Advanced Engine</h3>
+                    <i data-lucide="chevron-down" id="adv-chevron" style="width: 16px; transition: transform 0.3s;"></i>
+                </div>
+                <div id="advanced-settings" style="display: none; padding-top: 1rem; border-top: 1px solid var(--border);">
+                    <div class="control-group">
+                        <div class="input-wrapper">
+                            <label>SS Guidance <span><span id="ss_gs_val">7.5</span></span></label>
+                            <input type="range" id="ss_gs" min="1" max="10" step="0.1" value="7.5" oninput="updateVal('ss_gs')">
+                        </div>
+                        <div class="input-wrapper">
+                            <label>SS Sampling <span><span id="ss_steps_val">12</span></span></label>
+                            <input type="range" id="ss_steps" min="1" max="50" step="1" value="12" oninput="updateVal('ss_steps')">
+                        </div>
+                        <div class="input-wrapper">
+                            <label>Shape Guidance <span><span id="shape_gs_val">7.5</span></span></label>
+                            <input type="range" id="shape_gs" min="1" max="10" step="0.1" value="7.5" oninput="updateVal('shape_gs')">
+                        </div>
+                        <hr style="border: 0; border-top: 1px solid var(--border); margin: 0.5rem 0;">
+                        <div class="input-wrapper">
+                            <label>Decimation <span><span id="decimation_val">0.2M</span></span></label>
+                            <input type="range" id="decimation" min="100000" max="1000000" step="10000" value="200000" oninput="updateVal('decimation')">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="btn-stack">
+                <button class="btn btn-primary" id="generate-btn" disabled>
+                    <i data-lucide="zap"></i>
+                    Start Generation
+                </button>
+                <button class="btn btn-outline" id="extract-btn" style="display: none;">
+                    <i data-lucide="box"></i>
+                    Extract Mesh (GLB)
+                </button>
+                <button class="btn btn-outline" id="download-btn" style="display: none; background: rgba(16, 185, 129, 0.1); border-color: var(--accent); color: var(--accent);">
+                    <i data-lucide="download"></i>
+                    Download Asset
+                </button>
+                <button class="btn btn-primary" id="new-model-btn" style="display: none; background: linear-gradient(135deg, var(--primary), var(--accent));">
+                    <i data-lucide="plus"></i>
+                    Create New Model
+                </button>
+            </div>
+        </div>
+
+        <!-- Right: Main Area -->
+        <div class="main-content">
+            <header>
+                <div class="steps-nav">
+                    <div class="step-item active" id="step-1">
+                        <i data-lucide="image"></i>
+                        <span>1. SOURCE</span>
+                    </div>
+                    <div class="step-item" id="step-2">
+                        <i data-lucide="view"></i>
+                        <span>2. PREVIEW</span>
+                    </div>
+                    <div class="step-item" id="step-3">
+                        <i data-lucide="box"></i>
+                        <span>3. RESULT</span>
+                    </div>
+                </div>
+                <button class="btn btn-outline" id="clear-btn" title="Clear all & restart" style="width: 34px; height: 34px; padding: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center; border-color: rgba(248,113,113,0.3);">
+                    <i data-lucide="trash-2" style="width: 16px; height: 16px; color: #f87171;"></i>
+                </button>
+            </header>
+
+            <div class="workspace">
+                <!-- Panel 1: Upload -->
+                <div class="panel active" id="panel-1">
+                    <div class="upload-card" id="drop-zone" onclick="document.getElementById('file-input').click()">
+                        <input type="file" id="file-input" hidden accept="image/*">
+                        <div class="upload-hint" id="upload-hint">
+                            <i data-lucide="cloud-upload"></i>
+                            <h2 style="font-family: 'Outfit'; margin-top: 1rem;">Upload Reference</h2>
+                            <p>Drag and drop any image, or click to browse</p>
+                        </div>
+                        <img id="source-preview" src="" alt="Source">
+                    </div>
+                </div>
+
+                <!-- Panel 2: Multi-frame Preview -->
+                <div class="panel" id="panel-2">
+                    <img id="ref-thumb-2" class="ref-thumbnail" src="" alt="Reference">
+                    <div class="viewer-wrapper">
+                        <div id="frame-container">
+                            <!-- Injected via JS -->
+                        </div>
+                        <div class="viewer-overlay">
+                            <i data-lucide="move-horizontal" style="color: var(--primary); width: 20px;"></i>
+                            <input type="range" id="angle-slider" min="0" max="7" value="0" step="1" style="flex: 1;">
+                            <div style="font-family: monospace; font-weight: 700; color: var(--primary); font-size: 0.8rem;">
+                                VIEW_ANGLE: <span id="angle-display">00</span>°
+                            </div>
+                            <div id="camera-info" style="font-family: monospace; font-size: 0.75rem; color: var(--text-dim); display: none; border-left: 1px solid var(--border); padding-left: 1rem;">
+                                <span>FOV: <span id="fov-display" style="color: var(--accent);">--</span> rad</span>
+                                <span style="margin-left: 0.75rem;">Dist: <span id="dist-display" style="color: var(--accent);">--</span></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Panel 3: 3D Result -->
+                <div class="panel" id="panel-3">
+                    <img id="ref-thumb-3" class="ref-thumbnail" src="" alt="Reference">
+                    <div class="viewer-wrapper" id="viewer-split-container" style="display: flex; gap: 1rem; width: 100%; height: 100%; background: transparent; box-shadow: none;">
+                        <!-- Left Viewer (History/Compared Model) -->
+                        <div id="compare-viewer-container" style="flex: 1; display: none; height: 100%; border-radius: var(--radius-lg); overflow: hidden; box-shadow: 0 40px 100px rgba(0,0,0,0.6); position: relative;">
+                            <model-viewer id="compare-3d-viewer" 
+                                camera-controls 
+                                auto-rotate 
+                                camera-orbit="-180deg 90deg auto"
+                                shadow-intensity="1.5" 
+                                environment-image="neutral" 
+                                exposure="1.2"
+                                loading="eager"
+                                reveal="auto"
+                                interaction-prompt="none"
+                                power-preference="high-performance"
+                                style="width: 100%; height: 100%; background: radial-gradient(circle at 50% 50%, #151b26 0%, #080b12 100%);">
+                                <div slot="progress-bar" style="background: var(--accent); height: 4px;"></div>
+                            </model-viewer>
+                            <div style="position: absolute; top: 1rem; left: 1rem; background: rgba(16, 185, 129, 0.2); border: 1px solid var(--accent); color: var(--accent); padding: 0.35rem 0.75rem; border-radius: 100px; font-size: 0.7rem; font-weight: 700; backdrop-filter: blur(8px); z-index: 10; display: flex; align-items: center; gap: 0.35rem;">
+                                <div style="width: 6px; height: 6px; border-radius: 50%; background: var(--accent);"></div>
+                                COMPARED MODEL (OLD)
+                            </div>
+                            <button class="btn btn-outline" onclick="closeCompareViewer()" style="position: absolute; top: 1rem; right: 1rem; width: 30px; height: 30px; padding: 0; border-radius: 50%; z-index: 20; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; border-color: rgba(255,255,255,0.15);">
+                                <i data-lucide="x" style="width: 14px; height: 14px; color: white;"></i>
+                            </button>
+                        </div>
+                        
+                        <!-- Right Viewer (Newest/Current Model) -->
+                        <div id="main-viewer-container" style="flex: 1; height: 100%; border-radius: var(--radius-lg); overflow: hidden; box-shadow: 0 40px 100px rgba(0,0,0,0.6); position: relative;">
+                            <model-viewer id="main-3d-viewer" 
+                                camera-controls 
+                                auto-rotate 
+                                camera-orbit="-180deg 90deg auto"
+                                shadow-intensity="1.5" 
+                                environment-image="neutral" 
+                                exposure="1.2"
+                                loading="eager"
+                                reveal="auto"
+                                interaction-prompt="none"
+                                power-preference="high-performance"
+                                style="width: 100%; height: 100%; background: radial-gradient(circle at 50% 50%, #111827 0%, #090d16 100%);">
+                                <div slot="progress-bar" style="background: var(--primary); height: 4px;"></div>
+                            </model-viewer>
+                            <div id="newest-model-label" style="position: absolute; top: 1rem; left: 1rem; background: rgba(99, 102, 241, 0.2); border: 1px solid var(--primary); color: var(--primary); padding: 0.35rem 0.75rem; border-radius: 100px; font-size: 0.7rem; font-weight: 700; backdrop-filter: blur(8px); z-index: 10; display: none; align-items: center; gap: 0.35rem;">
+                                <div style="width: 6px; height: 6px; border-radius: 50%; background: var(--primary);"></div>
+                                NEWEST GENERATION
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer: Preset Samples -->
+            <div class="examples-drawer">
+                <h4><i data-lucide="image" style="width: 14px; height: 14px;"></i> Preset Samples</h4>
+                <div class="examples-grid" id="examples-grid">
+                    <!-- Injected via JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Sidebar: Gallery -->
+        <div class="gallery-sidebar">
+            <div id="history-section" style="display: block;">
+                <h4><i data-lucide="history" style="width: 14px; height: 14px;"></i> 3D Asset Gallery</h4>
+                <div id="history-list" style="display: flex; flex-direction: column; gap: 0.75rem; max-height: calc(100vh - 100px); overflow-y: auto; padding-right: 0.25rem;">
+                    <!-- Injected via JS -->
+                    <div style="font-size: 0.75rem; color: var(--text-dim); text-align: center; padding: 2rem; border: 1px dashed var(--border); border-radius: var(--radius-sm); background: rgba(255,255,255,0.01);">
+                        No generations yet. Upload an image above to start!
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="loading-overlay" id="loading-overlay">
+        <div class="loader-ring"></div>
+        <div style="text-align: center; width: 100%; max-width: 500px; padding: 0 2rem;">
+            <!-- Progress stages -->
+            <div id="progress-stages" style="display: none; text-align: left;">
+                <div class="progress-stage" id="progress-stage-item" style="margin-bottom: 1rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+                        <span id="progress-stage-name" style="font-size: 0.85rem; font-weight: 600; color: var(--primary);">Initializing...</span>
+                        <span id="progress-step-text" style="font-size: 0.75rem; color: var(--text-dim); font-family: monospace;">0/0</span>
+                    </div>
+                    <div style="width: 100%; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden;">
+                        <div id="progress-bar-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, var(--primary), var(--accent)); border-radius: 3px; transition: width 0.3s ease;"></div>
+                    </div>
+                </div>
+                <!-- Stage history log -->
+                <div id="progress-log" style="font-size: 0.75rem; color: var(--text-dim); line-height: 1.8; max-height: 180px; overflow-y: auto; margin-top: 1rem; padding-top: 0.5rem; border-top: 1px solid var(--border);"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="lightbox-overlay" id="lightbox-overlay" onclick="closeLightbox()">
+        <img id="lightbox-img" src="" alt="Enlarged">
+    </div>
+
+    <div class="status-toast" id="toast">Generation started!</div>
+
+    <script type="module">
+        import { Client, handle_file } from "./assets/app/gradio-client.js";
+
+        let client;
+        let currentFile = null;
+        let preprocessedFile = null;
+        let isPreprocessing = false;
+        let generationResult = null;
+        let currentMode = "shaded_forest";
+        let currentFrame = 0;
+        let currentStep = 1;
+        let currentModelId = null;
+
+        const MODES = [
+            { name: "Normal", key: "normal" },
+            { name: "Clay", key: "clay" },
+            { name: "Color", key: "base_color" },
+            { name: "Forest", key: "shaded_forest" },
+            { name: "Sunset", key: "shaded_sunset" },
+            { name: "Blue", key: "shaded_courtyard" }
+        ];
+
+        async function init() {
+            lucide.createIcons();
+            
+            // Unregister Service Worker to avoid caching conflicts, loading delays, and range/protocol errors.
+            // Browser native cache combined with Cache-Control headers provides maximum speed and reliability.
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.getRegistrations().then(registrations => {
+                    for (let registration of registrations) {
+                        registration.unregister();
+                    }
+                });
+            }
+
+            // Set default resolution based on server config (LOW_VRAM → 1024, else 1536)
+            try {
+                const cfgResp = await fetch('/app_config');
+                const cfg = await cfgResp.json();
+                document.getElementById('resolution').value = cfg.low_vram ? '1024' : '1536';
+            } catch (e) {
+                document.getElementById('resolution').value = '1536';
+            }
+            try {
+                client = await Client.connect(window.location.origin);
+                setupUI();
+                loadSamples();
+                fetchHistory();
+            } catch (err) {
+                console.error("Connection error:", err);
+                showToast("Connection failed. Try refreshing.");
+            }
+        }
+
+        function setupUI() {
+            // File Handling
+            const dropZone = document.getElementById('drop-zone');
+            const fileInput = document.getElementById('file-input');
+
+            dropZone.ondragover = (e) => { e.preventDefault(); dropZone.style.borderColor = 'var(--primary)'; };
+            dropZone.ondragleave = () => dropZone.style.borderColor = 'var(--border)';
+            dropZone.ondrop = (e) => {
+                e.preventDefault();
+                if (e.dataTransfer.files.length) handleImageUpload(e.dataTransfer.files[0]);
+            };
+            fileInput.onchange = (e) => { if (e.target.files.length) handleImageUpload(e.target.files[0]); };
+
+            // Buttons
+            document.getElementById('generate-btn').onclick = startGeneration;
+            document.getElementById('extract-btn').onclick = startExtraction;
+            document.getElementById('download-btn').onclick = () => {
+                const link = document.createElement('a');
+                link.href = document.getElementById('main-3d-viewer').src;
+                link.download = "pixal3d_export.glb";
+                link.click();
+            };
+
+            // Clear / Reset function
+            const resetApp = () => {
+                // Reset state
+                currentFile = null;
+                generationResult = null;
+                currentFrame = 0;
+                currentMode = "shaded_forest";
+
+                // Reset source preview
+                document.getElementById('source-preview').src = '';
+                document.getElementById('source-preview').style.display = 'none';
+                document.getElementById('upload-hint').style.display = 'flex';
+                document.getElementById('file-input').value = '';
+
+                // Reset generate button
+                document.getElementById('generate-btn').disabled = true;
+
+                // Reset preview frames
+                document.getElementById('frame-container').innerHTML = '';
+                document.getElementById('angle-slider').value = 0;
+                document.getElementById('angle-display').textContent = '00';
+
+                // Reset 3D viewer
+                resetModelViewer();
+
+                // Reset thumbnails
+                document.getElementById('ref-thumb-2').style.display = 'none';
+                document.getElementById('ref-thumb-2').src = '';
+                document.getElementById('ref-thumb-3').style.display = 'none';
+                document.getElementById('ref-thumb-3').src = '';
+
+                // Reset mode tabs
+                document.querySelectorAll('.mode-tab').forEach(t => {
+                    t.classList.toggle('active', t.textContent === 'Forest');
+                });
+
+                // Go back to step 1
+                setStep(1);
+                setUploadFrozen(false);
+                showToast("Cleared. Ready for new upload.");
+            };
+
+            // Clear button
+            document.getElementById('clear-btn').onclick = resetApp;
+            document.getElementById('new-model-btn').onclick = resetApp;
+
+            // Step navigation click
+            document.getElementById('step-1').onclick = () => setStep(1);
+            document.getElementById('step-2').onclick = () => { if (generationResult) setStep(2); };
+            document.getElementById('step-3').onclick = () => { if (document.getElementById('main-3d-viewer').src) setStep(3); };
+
+            // Slider
+            document.getElementById('angle-slider').oninput = (e) => {
+                currentFrame = parseInt(e.target.value);
+                document.getElementById('angle-display').textContent = (currentFrame * 22.5).toFixed(0).padStart(2, '0');
+                updateFrame();
+            };
+
+            // FOV auto toggle & unit switch
+            const fovAutoCheck = document.getElementById('fov-auto');
+            const fovInput = document.getElementById('manual-fov');
+            const fovUnit = document.getElementById('fov-unit');
+            const fovHint = document.getElementById('fov-hint');
+
+            function updateFovEnabled() {
+                const manual = !fovAutoCheck.checked;
+                fovInput.disabled = !manual;
+                fovUnit.disabled = !manual;
+                fovInput.style.opacity = manual ? '1' : '0.4';
+                fovUnit.style.opacity = manual ? '1' : '0.4';
+            }
+
+            fovAutoCheck.onchange = updateFovEnabled;
+
+            fovUnit.onchange = () => {
+                const val = parseFloat(fovInput.value);
+                if (isNaN(val)) return;
+                if (fovUnit.value === 'rad') {
+                    // deg -> rad
+                    fovInput.value = (val * Math.PI / 180).toFixed(4);
+                    fovInput.min = '0.0175'; fovInput.max = '2.9671'; fovInput.step = '0.01';
+                    fovHint.textContent = 'Manual FOV in radians (0.02–2.97 rad)';
+                } else {
+                    // rad -> deg
+                    fovInput.value = (val * 180 / Math.PI).toFixed(1);
+                    fovInput.min = '1'; fovInput.max = '170'; fovInput.step = '0.5';
+                    fovHint.textContent = 'Uncheck "Auto" to manually set FOV (1°–170°)';
+                }
+            };
+
+            // Mode Grid
+            const grid = document.getElementById('mode-grid');
+            MODES.forEach(m => {
+                const tab = document.createElement('div');
+                tab.className = `mode-tab ${m.key === currentMode ? 'active' : ''}`;
+                tab.textContent = m.name;
+                tab.onclick = () => {
+                    currentMode = m.key;
+                    document.querySelectorAll('.mode-tab').forEach(t => t.classList.remove('active'));
+                    tab.classList.add('active');
+                    updateFrame();
+                };
+                grid.appendChild(tab);
+            });
+        }
+
+        async function handleImageUpload(file) {
+            currentFile = file;
+            preprocessedFile = null;
+            isPreprocessing = true;
+            currentModelId = `model_${Date.now()}`;
+            document.getElementById('generate-btn').disabled = true;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = document.getElementById('source-preview');
+                const hint = document.getElementById('upload-hint');
+                img.src = e.target.result;
+                img.style.display = 'block';
+                hint.style.display = 'none';
+                setStep(1);
+            };
+            reader.readAsDataURL(file);
+            
+            // Call preprocess and update with segmented result
+            try {
+                const result = await client.predict("/preprocess", { image: handle_file(file), model_id: currentModelId });
+                const processedUrl = result.data[0].url;
+                const pathFromRes = result.data[0].path;
+                if (processedUrl || pathFromRes) {
+                    preprocessedFile = processedUrl || getWebUrl(pathFromRes);
+                    document.getElementById('source-preview').src = preprocessedFile;
+                    document.getElementById('ref-thumb-2').src = preprocessedFile;
+                    document.getElementById('ref-thumb-2').style.display = 'block';
+                    document.getElementById('ref-thumb-3').src = preprocessedFile;
+                    document.getElementById('ref-thumb-3').style.display = 'block';
+                }
+            } catch (err) {
+                console.error("Preprocess failed:", err);
+            }
+            isPreprocessing = false;
+            document.getElementById('generate-btn').disabled = false;
+        }
+
+        function setStep(num) {
+            currentStep = num;
+            document.querySelectorAll('.step-item').forEach((item, i) => {
+                item.className = 'step-item';
+                if (i + 1 < num) item.classList.add('completed');
+                if (i + 1 === num) item.classList.add('active');
+            });
+            document.querySelectorAll('.panel').forEach((p, i) => {
+                p.classList.toggle('active', i + 1 === num);
+            });
+
+            // Toggle side controls based on step
+            document.getElementById('render-controls').style.display = (num >= 2) ? 'block' : 'none';
+            document.getElementById('extract-btn').style.display = (num === 2) ? 'flex' : 'none';
+            document.getElementById('download-btn').style.display = (num === 3) ? 'flex' : 'none';
+            document.getElementById('new-model-btn').style.display = (num >= 2) ? 'flex' : 'none';
+
+            // Trigger resize on all model-viewers after DOM layout updates to fix 0px collapsed layout
+            setTimeout(() => {
+                document.querySelectorAll('model-viewer').forEach(mv => {
+                    if (typeof mv.resize === 'function') {
+                        mv.resize();
+                    }
+                });
+            }, 100);
+        }
+
+        async function startGeneration() {
+            if (!currentFile) return;
+
+            // Clear old preview frames and 3D result
+            generationResult = null;
+            document.getElementById('frame-container').innerHTML = '';
+            document.getElementById('angle-slider').value = 0;
+            document.getElementById('angle-display').textContent = '00';
+            resetModelViewer(true);
+            document.getElementById('extract-btn').style.display = 'none';
+            document.getElementById('download-btn').style.display = 'none';
+
+            // Stay on step 1 during generation
+            setStep(1);
+
+            showLoading();
+            startProgressListener();
+            try {
+                const params = {
+                    seed: parseInt(document.getElementById('seed').value),
+                    resolution: parseInt(document.getElementById('resolution').value),
+                    model_id: currentModelId,
+                    ss_guidance_strength: parseFloat(document.getElementById('ss_gs').value),
+                    ss_sampling_steps: parseInt(document.getElementById('ss_steps').value),
+                    shape_slat_guidance_strength: parseFloat(document.getElementById('shape_gs').value),
+                    manual_fov: (() => {
+                        if (document.getElementById('fov-auto').checked) return -1.0;
+                        const v = parseFloat(document.getElementById('manual-fov').value);
+                        return document.getElementById('fov-unit').value === 'rad' ? v * 180 / Math.PI : v;
+                    })()
+                };
+
+                const result = await client.predict("/generate_3d", params);
+                generationResult = result.data[0];
+                
+                stopProgressListener();
+                populateFrames(generationResult.render_paths);
+                fetchHistory();
+
+                // Display camera info
+                if (generationResult.camera_angle_x != null) {
+                    document.getElementById('fov-display').textContent = generationResult.camera_angle_x.toFixed(3);
+                    document.getElementById('dist-display').textContent = generationResult.distance.toFixed(3);
+                    document.getElementById('camera-info').style.display = 'inline';
+                }
+
+                setStep(2);
+                hideLoading();
+                showToast("Generation complete!");
+            } catch (err) {
+                console.error(err);
+                stopProgressListener();
+                hideLoading();
+                showToast("An error occurred during synthesis.");
+            }
+        }
+
+        // Progress Polling
+        let progressInterval = null;
+        let lastStageName = "";
+        
+        function startProgressListener() {
+            // Show progress UI
+            document.getElementById('progress-stages').style.display = 'block';
+            document.getElementById('progress-log').innerHTML = '';
+            document.getElementById('progress-stage-name').textContent = 'Initializing...';
+            document.getElementById('progress-step-text').textContent = '';
+            document.getElementById('progress-bar-fill').style.width = '0%';
+            lastStageName = "";
+
+            // Poll every 500ms instead of SSE
+            progressInterval = setInterval(async () => {
+                try {
+                    const resp = await fetch(`/progress?model_id=${currentModelId}`);
+                    if (!resp.ok) return;
+                    const data = await resp.json();
+                    if (data.done) {
+                        stopProgressListener();
+                        return;
+                    }
+                    updateProgressUI(data);
+                } catch (e) {}
+            }, 500);
+        }
+
+        function stopProgressListener() {
+            if (progressInterval) {
+                clearInterval(progressInterval);
+                progressInterval = null;
+            }
+        }
+
+        function updateProgressUI(data) {
+            const stageName = data.stage || '';
+            const step = data.step || 0;
+            const total = data.total || 0;
+
+            // If stage changed, log the previous one as completed
+            if (stageName && stageName !== lastStageName) {
+                if (lastStageName) {
+                    const logEl = document.getElementById('progress-log');
+                    logEl.innerHTML += `<div style="display:flex;align-items:center;gap:0.4rem;"><span style="color:var(--accent);">✓</span> ${lastStageName}</div>`;
+                    logEl.scrollTop = logEl.scrollHeight;
+                }
+                lastStageName = stageName;
+            }
+
+            // Update current stage display
+            document.getElementById('progress-stage-name').textContent = stageName;
+            if (total > 0) {
+                document.getElementById('progress-step-text').textContent = `${step}/${total}`;
+                const pct = Math.min(100, (step / total) * 100);
+                document.getElementById('progress-bar-fill').style.width = pct + '%';
+            } else {
+                document.getElementById('progress-step-text').textContent = '';
+                document.getElementById('progress-bar-fill').style.width = '0%';
+            }
+        }
+
+        let frameElementsMap = {};
+
+        function populateFrames(renderPaths) {
+            const container = document.getElementById('frame-container');
+            container.innerHTML = '';
+            frameElementsMap = {};
+            Object.entries(renderPaths).forEach(([mode, files]) => {
+                frameElementsMap[mode] = [];
+                files.forEach((file, i) => {
+                    let url = file.url || getWebUrl(file.path);
+                    const img = document.createElement('img');
+                    img.src = url;
+                    img.className = 'preview-frame';
+                    img.id = `frame-${mode}-${i}`;
+                    img.onerror = () => {
+                        if (file.path && !img.src.includes(`/tmp/${currentModelId}`)) {
+                            img.src = getWebUrl(file.path);
+                        }
+                    };
+                    container.appendChild(img);
+                    frameElementsMap[mode].push(img);
+                });
+            });
+            updateFrame();
+        }
+
+        let lastActiveFrame = null;
+        function updateFrame() {
+            if (lastActiveFrame) {
+                lastActiveFrame.classList.remove('active');
+            }
+            const active = frameElementsMap[currentMode] ? frameElementsMap[currentMode][currentFrame] : null;
+            if (active) {
+                active.classList.add('active');
+                lastActiveFrame = active;
+            } else {
+                const fallbackActive = document.getElementById(`frame-${currentMode}-${currentFrame}`);
+                if (fallbackActive) {
+                    fallbackActive.classList.add('active');
+                    lastActiveFrame = fallbackActive;
+                }
+            }
+        }
+
+        // Destroy and recreate model-viewer to fully purge old mesh from WebGL
+        function resetModelViewer(forceRecreate = false) {
+            const mv = document.getElementById('main-3d-viewer');
+            if (mv && !forceRecreate) {
+                return mv;
+            }
+            const container = document.getElementById('main-viewer-container');
+            const old = document.getElementById('main-3d-viewer');
+            if (old) old.remove();
+            const newMv = document.createElement('model-viewer');
+            newMv.id = 'main-3d-viewer';
+            newMv.setAttribute('camera-controls', '');
+            newMv.setAttribute('auto-rotate', '');
+            newMv.setAttribute('camera-orbit', '-180deg 90deg auto');
+            newMv.setAttribute('shadow-intensity', '1.5');
+            newMv.setAttribute('environment-image', 'neutral');
+            newMv.setAttribute('exposure', '1.2');
+            newMv.setAttribute('loading', 'eager');
+            newMv.setAttribute('reveal', 'auto');
+            newMv.setAttribute('interaction-prompt', 'none');
+            newMv.setAttribute('power-preference', 'high-performance');
+            newMv.style.width = '100%';
+            newMv.style.height = '100%';
+            newMv.style.background = 'radial-gradient(circle at 50% 50%, #0c0f1d 0%, #030712 100%)';
+            newMv.style.visibility = 'visible'; // Make visible by default to guarantee rendering even if load event delays
+            newMv.innerHTML = '<div slot="progress-bar" style="background: var(--primary); height: 4px;"></div>';
+            container.appendChild(newMv);
+            return newMv;
+        }
+
+        async function startExtraction() {
+            if (!generationResult) return;
+
+            // Switch away from panel-3 immediately so user won't see stale mesh
+            if (currentStep === 3) setStep(2);
+
+            // Destroy old model-viewer and create a fresh one (purges WebGL scene completely)
+            const viewer = resetModelViewer(true);
+
+            showLoading();
+            startProgressListener();
+            try {
+                const params = {
+                    state_path: generationResult.state_path,
+                    decimation_target: parseInt(document.getElementById('decimation').value),
+                    texture_size: 2048,
+                    session_id: currentModelId
+                };
+
+                const result = await client.predict("/extract_glb_api", params);
+                const glbUrl = result.data[0].url || getWebUrl(result.data[0].path);
+
+                stopProgressListener();
+
+                const localUrl = await getCachedGlbUrl(glbUrl);
+
+                // Wait for the new model to fully load before revealing (with timeout fallback)
+                await new Promise((resolve) => {
+                    let settled = false;
+                    const onLoad = () => {
+                        if (settled) return;
+                        settled = true;
+                        viewer.removeEventListener('load', onLoad);
+                        viewer.removeEventListener('model-visibility', onLoad);
+                        clearTimeout(timer);
+                        resolve();
+                    };
+                    // Timeout fallback: if load event never fires (e.g. model-viewer error),
+                    // resolve anyway after 30s to avoid permanent hang
+                    const timer = setTimeout(() => {
+                        if (settled) return;
+                        settled = true;
+                        viewer.removeEventListener('load', onLoad);
+                        viewer.removeEventListener('model-visibility', onLoad);
+                        resolve();
+                    }, 30000);
+                    viewer.addEventListener('load', onLoad);
+                    viewer.addEventListener('model-visibility', onLoad);
+                    viewer.src = localUrl;
+                });
+
+                viewer.style.visibility = 'visible';
+                setStep(3);
+                hideLoading();
+                showToast("3D Asset ready!");
+                fetchHistory();
+            } catch (err) {
+                console.error(err);
+                stopProgressListener();
+                viewer.style.visibility = 'visible';
+                hideLoading();
+                showToast("Extraction failed.");
+            }
+        }
+
+        function loadSamples() {
+            const grid = document.getElementById('examples-grid');
+            const samples = [
+                'assets/images/0_img.png',
+                'assets/images/1_img.png',
+                'assets/images/3_img.webp',
+                'assets/images/4_img.png',
+                'assets/images/5_img.webp',
+                'assets/images/6_img.png',
+                'assets/images/7_img.png',
+                'assets/images/9_img.png',
+                'assets/images/10_img.webp',
+                'assets/images/11_img.png',
+                'assets/images/12_img.png',
+                'assets/images/17_img.png',
+                'assets/images/21_img.png',
+                'assets/images/s_13_img.jpg',
+                'assets/images/s_14_img.jpg',
+                'assets/images/s_15_img.png',
+                'assets/images/s_16_img.png',
+                'assets/images/s_18_img.png',
+                'assets/images/s_20_img.webp'
+            ];
+
+            // Preload sample thumbnails instantly in parallel
+            samples.forEach(path => {
+                const parts = path.split('/');
+                const filename = parts.pop();
+                const nameWithoutExt = filename.substring(0, filename.lastIndexOf('.'));
+                const thumbPath = `assets/images/thumbnails/${nameWithoutExt}.webp`;
+                
+                const link = document.createElement('link');
+                link.rel = 'preload';
+                link.as = 'image';
+                link.href = thumbPath;
+                document.head.appendChild(link);
+            });
+
+            function createItem(path) {
+                const div = document.createElement('div');
+                div.className = 'gallery-item';
+                
+                // Construct thumbnail path: assets/images/filename.png -> assets/images/thumbnails/filename.webp
+                const parts = path.split('/');
+                const filename = parts.pop();
+                const nameWithoutExt = filename.substring(0, filename.lastIndexOf('.'));
+                const thumbPath = `assets/images/thumbnails/${nameWithoutExt}.webp`;
+
+                // Set lazy loading and point src to small, fast WebP thumbnail
+                div.innerHTML = `<img src="${thumbPath}" loading="lazy" draggable="false" onerror="this.src='${path}'">`;
+                
+                div.onclick = async () => {
+                    showLoading();
+                    const res = await fetch(path); // Fetch high-res original for actual 3D generation
+                    const blob = await res.blob();
+                    const ext = path.split('.').pop().toLowerCase();
+                    const mimeMap = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
+                    const mime = mimeMap[ext] || 'image/png';
+                    const file = new File([blob], path.split('/').pop(), { type: mime });
+                    await handleImageUpload(file);
+                    hideLoading();
+                };
+                return div;
+            }
+
+            samples.forEach(path => grid.appendChild(createItem(path)));
+        }
+
+        // Helpers
+        function getWebUrl(localPath) {
+            if (!localPath) return '';
+            
+            // If it is already our correct relative route, return it
+            if (localPath.startsWith('/tmp/model_')) {
+                return localPath;
+            }
+            
+            // Extract the path after 'tmp/' if it contains 'tmp/model_'
+            const modelMatch = localPath.match(/[\\/]tmp[\\/](model_[^\\/]+[\\/].+)$/i);
+            if (modelMatch && modelMatch[1]) {
+                return `/tmp/${modelMatch[1].replace(/\\/g, '/')}`;
+            }
+            
+            // Or extract directly starting from 'model_'
+            const directMatch = localPath.match(/(model_[^\\/]+[\\/].+)$/i);
+            if (directMatch && directMatch[1]) {
+                return `/tmp/${directMatch[1].replace(/\\/g, '/')}`;
+            }
+
+            // Fallback: If it's just a filename or other paths, route it to our current model workspace
+            const filename = localPath.split(/[\\/]/).pop();
+            if (currentModelId) {
+                return `/tmp/${currentModelId}/${filename}`;
+            }
+            return `/tmp/${filename}`;
+        }
+
+        window.openLightbox = (src) => {
+            const lb = document.getElementById('lightbox-overlay');
+            document.getElementById('lightbox-img').src = src;
+            lb.style.display = 'flex';
+        };
+
+        window.closeLightbox = () => {
+            document.getElementById('lightbox-overlay').style.display = 'none';
+        };
+
+        // Thumbnail click to enlarge
+        document.getElementById('ref-thumb-2').onclick = (e) => { e.stopPropagation(); openLightbox(e.target.src); };
+        document.getElementById('ref-thumb-3').onclick = (e) => { e.stopPropagation(); openLightbox(e.target.src); };
+
+        window.toggleAdvanced = () => {
+            const el = document.getElementById('advanced-settings');
+            const chev = document.getElementById('adv-chevron');
+            const isOpen = el.style.display === 'block';
+            el.style.display = isOpen ? 'none' : 'block';
+            chev.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
+        };
+
+        window.updateVal = (id) => {
+            const val = document.getElementById(id).value;
+            let label = val;
+            if (id === 'decimation') label = (val/1000000).toFixed(1) + 'M';
+            document.getElementById(id + '_val').textContent = label;
+        };
+
+        window.randomizeSeed = () => {
+            const s = Math.floor(Math.random() * 999999);
+            document.getElementById('seed').value = s;
+            document.getElementById('seed-display').textContent = s;
+        };
+
+        function showLoading() {
+            document.getElementById('loading-overlay').style.display = 'flex';
+        }
+
+        function hideLoading() {
+            document.getElementById('loading-overlay').style.display = 'none';
+            document.getElementById('progress-stages').style.display = 'none';
+            document.getElementById('progress-log').innerHTML = '';
+            document.getElementById('progress-bar-fill').style.width = '0%';
+        }
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.style.display = 'block';
+            setTimeout(() => t.style.display = 'none', 3000);
+        }
+
+        function setUploadFrozen(frozen) {
+            const dropZone = document.getElementById('drop-zone');
+            const fileInput = document.getElementById('file-input');
+            const uploadHint = document.getElementById('upload-hint');
+            
+            if (frozen) {
+                dropZone.classList.add('disabled');
+                fileInput.disabled = true;
+                const p = uploadHint.querySelector('p');
+                if (p) p.textContent = "Viewing history model. Click 'Create New Model' to upload.";
+            } else {
+                dropZone.classList.remove('disabled');
+                fileInput.disabled = false;
+                const p = uploadHint.querySelector('p');
+                if (p) p.textContent = "Drag and drop any image, or click to browse";
+            }
+        }
+
+        const glbCache = new Map();
+
+        async function getCachedGlbUrl(url) {
+            const cleanUrl = getWebUrl(url);
+            if (glbCache.has(cleanUrl)) {
+                return glbCache.get(cleanUrl);
+            }
+            try {
+                const response = await fetch(cleanUrl);
+                const blob = await response.blob();
+                const blobUrl = URL.createObjectURL(blob);
+                glbCache.set(cleanUrl, blobUrl);
+                return blobUrl;
+            } catch (e) {
+                console.error("[Cache] Failed to fetch and cache GLB Blob URL:", e);
+                return cleanUrl;
+            }
+        }
+
+        async function prefetchModelAssets(modelId, glbUrl, imageUrl, isTopModel) {
+            if (!modelId) return;
+            
+            // Prefetch image_url
+            if (imageUrl) {
+                const img = new Image();
+                img.src = getWebUrl(imageUrl);
+            }
+            
+            // Prefetch and cache GLB as memory Blob URL for instant 0ms viewing
+            if (glbUrl) {
+                getCachedGlbUrl(glbUrl).catch(() => {});
+            }
+            
+            // Prefetch key preview images
+            const modes = isTopModel ? ['normal', 'clay', 'base_color', 'shaded_forest', 'shaded_sunset', 'shaded_courtyard'] : ['shaded_forest'];
+            modes.forEach(mode => {
+                for (let i = 0; i < 8; i++) {
+                    const img = new Image();
+                    img.src = `/tmp/${modelId}/render_${mode}_${i}.jpg`;
+                }
+            });
+        }
+
+        async function fetchHistory() {
+            try {
+                const resp = await fetch('/history');
+                const history = await resp.json();
+                const listEl = document.getElementById('history-list');
+                
+                if (!history || history.length === 0) {
+                    listEl.innerHTML = `<div style="font-size: 0.75rem; color: var(--text-dim); text-align: center; padding: 2rem; border: 1px dashed var(--border); border-radius: var(--radius-sm); background: rgba(255,255,255,0.01);">No generations yet. Upload an image above to start!</div>`;
+                    return;
+                }
+                
+                listEl.innerHTML = '';
+                
+                history.forEach(m => {
+                    const item = document.createElement('div');
+                    item.className = 'history-item';
+                    
+                    const date = new Date(m.timestamp);
+                    const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    
+                    const thumbUrl = m.thumbnail_url || m.image_url || 'assets/app/clay.png';
+                    const hasGlb = !!m.glb_url;
+                    const status = m.status || (hasGlb ? "completed" : "generated");
+                    
+                    let actionButtonsHtml = '';
+                    if (status === "preprocessed") {
+                        actionButtonsHtml = `
+                            <button class="btn btn-primary" style="padding: 0.35rem 0.6rem; font-size: 0.65rem; height: auto; font-weight:700; line-height:1; border-radius: 4px;" onclick="resumePreprocessed('${m.id}', '${m.image_url}')">Generate</button>
+                        `;
+                    } else if (status === "generated" || !hasGlb) {
+                        actionButtonsHtml = `
+                            <button class="btn btn-outline" style="padding: 0.35rem 0.6rem; font-size: 0.65rem; height: auto; font-weight:700; line-height:1; border-color: var(--accent); color: var(--accent); border-radius: 4px;" onclick="resumeGenerated('${m.id}', '${m.image_url}')">Extract GLB</button>
+                        `;
+                    } else if (status === "completed" || hasGlb) {
+                        actionButtonsHtml = `
+                            <button class="btn btn-outline" style="padding: 0.35rem 0.6rem; font-size: 0.65rem; height: auto; font-weight:700; line-height:1; border-color: var(--accent); color: var(--accent); border-radius: 4px;" onclick="compareModel('${m.glb_url}')">Compare</button>
+                            <button class="btn btn-outline" style="padding: 0.35rem 0.6rem; font-size: 0.65rem; height: auto; font-weight:700; line-height:1; border-radius: 4px;" onclick="loadModelAsPrimary('${m.glb_url}', '${m.image_url}')">View</button>
+                        `;
+                    }
+                    
+                    item.innerHTML = `
+                        <img src="${thumbUrl}" onclick="openLightbox('${m.image_url || thumbUrl}')" class="history-thumb">
+                        <div style="flex: 1; display: flex; flex-direction: column; gap: 0.35rem; min-width: 0;">
+                            <span style="font-size: 0.75rem; font-weight: 700; color: white; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0.01em;">Model ${timeStr}</span>
+                            <div style="display: flex; gap: 0.4rem;">
+                                ${actionButtonsHtml}
+                            </div>
+                        </div>
+                    `;
+                    listEl.appendChild(item);
+                });
+                lucide.createIcons();
+                
+                // Proactively prefetch the top 5 models' assets in the background to ensure ZERO latency when viewing them
+                const top5 = history.slice(0, 5);
+                top5.forEach((m, idx) => {
+                    if (m.status === "completed" || m.glb_url) {
+                        prefetchModelAssets(m.id, m.glb_url, m.image_url, idx === 0);
+                    }
+                });
+            } catch (err) {
+                console.error("Fetch history failed:", err);
+            }
+        }
+
+        window.compareModel = async (glbUrl) => {
+            const compContainer = document.getElementById('compare-viewer-container');
+            const compViewer = document.getElementById('compare-3d-viewer');
+            const newestLabel = document.getElementById('newest-model-label');
+            
+            const mainViewer = document.getElementById('main-3d-viewer');
+            if (mainViewer) {
+                mainViewer.style.visibility = 'visible';
+            }
+            
+            showLoading();
+            const localUrl = await getCachedGlbUrl(glbUrl);
+            compViewer.src = localUrl;
+            hideLoading();
+            
+            compContainer.style.display = 'block';
+            newestLabel.style.display = 'flex';
+            
+            setStep(3);
+            showToast("Comparison loaded side-by-side!");
+        };
+        
+        window.closeCompareViewer = () => {
+            const compContainer = document.getElementById('compare-viewer-container');
+            const compViewer = document.getElementById('compare-3d-viewer');
+            const newestLabel = document.getElementById('newest-model-label');
+            
+            compViewer.removeAttribute('src');
+            compContainer.style.display = 'none';
+            newestLabel.style.display = 'none';
+        };
+        
+        window.resumePreprocessed = (modelId, imageUrl) => {
+            currentModelId = modelId;
+            preprocessedFile = getWebUrl(imageUrl);
+            
+            // Set Step 1 active to show reference
+            setStep(1);
+            setUploadFrozen(false);
+            
+            // Re-render source previews
+            document.getElementById('source-preview').src = preprocessedFile;
+            document.getElementById('source-preview').style.display = 'block';
+            document.getElementById('upload-hint').style.display = 'none';
+            
+            document.getElementById('ref-thumb-2').src = preprocessedFile;
+            document.getElementById('ref-thumb-2').style.display = 'block';
+            document.getElementById('ref-thumb-3').src = preprocessedFile;
+            document.getElementById('ref-thumb-3').style.display = 'block';
+            
+            // Force activate the start generation button
+            document.getElementById('generate-btn').disabled = false;
+            showToast("Resumed preprocessed image! Click 'Start Generation' to synthesize.");
+        };
+
+        window.resumeGenerated = (modelId, imageUrl) => {
+            currentModelId = modelId;
+            preprocessedFile = getWebUrl(imageUrl);
+            
+            // Re-render reference previews
+            document.getElementById('source-preview').src = preprocessedFile;
+            document.getElementById('source-preview').style.display = 'block';
+            document.getElementById('upload-hint').style.display = 'none';
+            
+            document.getElementById('ref-thumb-2').src = preprocessedFile;
+            document.getElementById('ref-thumb-2').style.display = 'block';
+            document.getElementById('ref-thumb-3').src = preprocessedFile;
+            document.getElementById('ref-thumb-3').style.display = 'block';
+            
+            // Reconstruct and load Step 2 previews
+            const modes = ['normal', 'clay', 'base_color', 'shaded_forest', 'shaded_sunset', 'shaded_courtyard'];
+            const render_paths = {};
+            modes.forEach(mode => {
+                render_paths[mode] = [];
+                for (let i = 0; i < 8; i++) {
+                    render_paths[mode].push({
+                        path: `/tmp/${modelId}/render_${mode}_${i}.jpg`
+                    });
+                }
+            });
+            
+            populateFrames(render_paths);
+            generationResult = {
+                state_path: `/tmp/${modelId}/state.npz`,
+                render_paths: render_paths
+            };
+            
+            // Freeze upload since this is resume mode, set step to 2 and enable GLB extraction
+            setUploadFrozen(true);
+            setStep(2);
+            document.getElementById('extract-btn').style.display = 'flex';
+            showToast("Resumed generated turntable! Click 'Extract Mesh (GLB)' to compile.");
+        };
+
+        window.loadModelAsPrimary = async (glbUrl, imageUrl) => {
+            setStep(3); // Set step first so panel-3 is visible and model-viewer obtains dimensions
+            const viewer = resetModelViewer(false);
+            
+            // Set up load listener before changing src to ensure visibility toggles properly
+            const onLoad = () => {
+                viewer.style.visibility = 'visible';
+                viewer.removeEventListener('load', onLoad);
+                viewer.removeEventListener('model-visibility', onLoad);
+            };
+            viewer.addEventListener('load', onLoad);
+            viewer.addEventListener('model-visibility', onLoad);
+            
+            showLoading();
+            const localUrl = await getCachedGlbUrl(glbUrl);
+            viewer.src = localUrl;
+            hideLoading();
+            
+            if (imageUrl) {
+                const resolvedImg = getWebUrl(imageUrl);
+                // Update source preview
+                document.getElementById('source-preview').src = resolvedImg;
+                document.getElementById('source-preview').style.display = 'block';
+                document.getElementById('upload-hint').style.display = 'none';
+                
+                // Update Step 2 preview reference thumbnail
+                document.getElementById('ref-thumb-2').src = resolvedImg;
+                document.getElementById('ref-thumb-2').style.display = 'block';
+                
+                // Update Step 3 result reference thumbnail
+                document.getElementById('ref-thumb-3').src = resolvedImg;
+                document.getElementById('ref-thumb-3').style.display = 'block';
+            }
+            
+            // Freeze upload controls because we are in history view mode
+            setUploadFrozen(true);
+            
+            // Extract model_id from glbUrl
+            const match = glbUrl.match(/[\\/]tmp[\\/](model_[^\\/]+)/i);
+            if (match && match[1]) {
+                const loadedId = match[1];
+                
+                // Switch global state to loaded model's id
+                currentModelId = loadedId;
+                
+                // Retrieve and reconstruct historical multi-angle previews (Step 2)
+                const modes = ['normal', 'clay', 'base_color', 'shaded_forest', 'shaded_sunset', 'shaded_courtyard'];
+                const render_paths = {};
+                modes.forEach(mode => {
+                    render_paths[mode] = [];
+                    for (let i = 0; i < 8; i++) {
+                        render_paths[mode].push({
+                            path: `/tmp/${loadedId}/render_${mode}_${i}.jpg`
+                        });
+                    }
+                });
+                
+                // Repopulate step 2 preview timeline
+                populateFrames(render_paths);
+                
+                // Construct fake generationResult so tab switching logic is unblocked
+                generationResult = {
+                    state_path: `/tmp/${loadedId}/state.npz`,
+                    render_paths: render_paths
+                };
+            }
+            
+            showToast("Loaded history model!");
+        };
+
+        window.fetchHistory = fetchHistory;
+
+        init();
+    </script>
+</body>
+</html>
