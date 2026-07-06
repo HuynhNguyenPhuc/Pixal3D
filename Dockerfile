@@ -2,7 +2,7 @@ FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
 
 LABEL name="pixal3d-api" \
       maintainer="pixal3d-api" \
-      description="TRELLIS.2 API Server with CUDA support"
+      description="Pixal3D API Server with CUDA support"
 
 # Set working directory
 WORKDIR /app
@@ -23,11 +23,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Build essentials
-    build-essential \
-    cmake \
-    ninja-build \
-    pkg-config \
     # Python
     python3.10 \
     python3.10-dev \
@@ -70,56 +65,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install PyTorch with CUDA 12.4 support
-RUN pip install --no-cache-dir \
-    torch==2.6.0 \
-    torchvision==0.21.0 \
-    --index-url https://download.pytorch.org/whl/cu124
+# Copy pre-built requirements first to optimize Docker layer caching
+COPY requirements-hfdemo.txt /app/
 
-# Install basic dependencies
-RUN pip install --no-cache-dir \
-    imageio imageio-ffmpeg tqdm easydict opencv-python-headless ninja trimesh \
-    transformers==4.57.6 gradio==6.0.1 tensorboard pandas lpips zstandard \
-    git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8 \
-    kornia timm
-RUN pip install --no-cache-dir pillow-simd
+# Install Python packages using pre-built binary wheels (including o_voxel, cumesh, etc.)
+RUN pip install --no-cache-dir -r requirements-hfdemo.txt
 
-# Install flash-attention with parallel compilation
-RUN MAX_JOBS=4 pip install flash-attn==2.7.3 --no-build-isolation --no-cache-dir
+# Install utils3d as specified in the project documentation
+RUN pip install --no-cache-dir https://github.com/LDYang694/Storages/releases/download/20260430/utils3d-0.0.2-py3-none-any.whl
 
-# Install nvdiffrast
-RUN mkdir -p /tmp/extensions && \
-    git clone -b v0.4.0 https://github.com/NVlabs/nvdiffrast.git /tmp/extensions/nvdiffrast && \
-    pip install --no-cache-dir /tmp/extensions/nvdiffrast --no-build-isolation && \
-    rm -rf /tmp/extensions/nvdiffrast
-
-# Install nvdiffrec
-RUN mkdir -p /tmp/extensions && \
-    git clone -b renderutils https://github.com/JeffreyXiang/nvdiffrec.git /tmp/extensions/nvdiffrec && \
-    pip install --no-cache-dir /tmp/extensions/nvdiffrec --no-build-isolation && \
-    rm -rf /tmp/extensions/nvdiffrec
-
-# Install CuMesh with parallel compilation
-RUN mkdir -p /tmp/extensions && \
-    git clone https://github.com/JeffreyXiang/CuMesh.git /tmp/extensions/CuMesh --recursive && \
-    MAX_JOBS=4 pip install --no-cache-dir /tmp/extensions/CuMesh --no-build-isolation && \
-    rm -rf /tmp/extensions/CuMesh
-
-# Install FlexGEMM
-RUN mkdir -p /tmp/extensions && \
-    git clone https://github.com/JeffreyXiang/FlexGEMM.git /tmp/extensions/FlexGEMM --recursive && \
-    pip install --no-cache-dir /tmp/extensions/FlexGEMM --no-build-isolation && \
-    rm -rf /tmp/extensions/FlexGEMM
-
-# Install o-voxel
-COPY o-voxel /app/o-voxel
-RUN MAX_JOBS=4 pip install --no-cache-dir /app/o-voxel --no-build-isolation
-
-# Install Python dependencies
-COPY requirements-api.txt /app/
-RUN pip install --no-cache-dir -r requirements-api.txt
-
-COPY . /app/
+# Copy only the necessary folders and files for API and Worker to run
+COPY app.py app_state.py config.py constants.py inference.py /app/
+COPY pixal3d /app/pixal3d
+COPY broker /app/broker
+COPY controllers /app/controllers
+COPY keys /app/keys
+COPY routes /app/routes
+COPY schemas /app/schemas
+COPY utilities /app/utilities
+COPY worker /app/worker
 
 # Create cache directory
 RUN mkdir -p /app/gradio_cache
@@ -141,4 +105,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -f http://localhost:8081/health || exit 1
 
 # Default command
-CMD ["python", "main.py", "--host=0.0.0.0", "--port=8081", "--cache-path=/app/gradio_cache"]
+CMD ["python", "app.py", "--host=0.0.0.0", "--port=8081", "--cache-path=/app/gradio_cache"]

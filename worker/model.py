@@ -13,7 +13,7 @@ import o_voxel
 import numpy as np
 
 from pixal3d.pipelines import Pixal3DImageTo3DPipeline
-from pixal3d.utils.render_utils import get_camera_params_wild_moge
+from inference import get_camera_params_wild_moge
 from utilities.image import convert_to_pil_image
 from utilities.logger import get_logger
 from utilities.gpu import aggressive_gpu_cleanup
@@ -151,7 +151,6 @@ class ModelWorker:
             shape_slat_sampler_params=shape_sampler_params,
             tex_slat_sampler_params=tex_sampler_params,
             pipeline_type=pipeline_type,
-            verbose=False,
         )
         
         mesh = outputs[0]

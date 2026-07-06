@@ -121,22 +121,7 @@ async def handle_send(request: GenerationRequest) -> JSONResponse:
                 },
             )
 
-        # Enqueue the task into the Redis stream and increment the depth counter atomically.
-        task_data = build_generation_params(request)
-        entry_id = enqueue_task(task_data)
-
-        if not entry_id:
-            logger.error(f"Failed to enqueue task {uid}: Redis pipeline returned no entry ID")
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "status": "error", 
-                    "hash": uid, 
-                    "error": "Failed to enqueue task"
-                },
-            )
-
-        # Set initial status in Redis.
+        # Set initial status in Redis first to prevent race conditions with workers picking up the task too quickly.
         set_status_in_redis(
             uid,
             {
@@ -147,6 +132,37 @@ async def handle_send(request: GenerationRequest) -> JSONResponse:
             },
             force=True,
         )
+
+        # Reset retry counter for manual user retry/resubmission of the same hash.
+        try:
+            redis_client.delete(f"task:{uid}:retries")
+        except Exception as exc:
+            logger.warning(f"Failed to reset retry counter for task {uid}: {exc}")
+
+        # Enqueue the task into the Redis stream and increment the depth counter atomically.
+        task_data = build_generation_params(request)
+        entry_id = enqueue_task(task_data)
+
+        if not entry_id:
+            logger.error(f"Failed to enqueue task {uid}: Redis pipeline returned no entry ID")
+            # If enqueuing failed, set status back to error.
+            set_status_in_redis(
+                uid,
+                {
+                    "status": "error",
+                    "hash": uid,
+                    "message": "Failed to enqueue task",
+                },
+                force=True,
+            )
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "error", 
+                    "hash": uid, 
+                    "error": "Failed to enqueue task"
+                },
+            )
 
         logger.info(f"Task {uid} added to stream with entry ID {entry_id}. Queue depth: {queue_depth + 1}")
         return JSONResponse(
