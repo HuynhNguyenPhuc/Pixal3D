@@ -1,7 +1,9 @@
 """Model worker for Pixal3D generation tasks."""
 
-import gc
 import os
+os.environ.setdefault('ATTN_BACKEND', 'flash_attn_3')
+
+import gc
 import time
 import uuid
 
@@ -81,8 +83,6 @@ class ModelWorker:
         self.logger.info('Loading MoGe-2 for camera estimation (CPU)...')
         self.moge_model = load_moge_model(device='cpu')
 
-        os.environ.setdefault('ATTN_BACKEND', 'flash_attn_3')
-
         self.logger.info('Worker initialization complete.')
         aggressive_gpu_cleanup()
 
@@ -142,7 +142,7 @@ class ModelWorker:
         self.moge_model.cpu()
         os.remove(temp_path)
 
-        outputs, _ = self.pipeline.run(
+        outputs = self.pipeline.run(
             image,
             camera_params=camera_params,
             seed=seed,

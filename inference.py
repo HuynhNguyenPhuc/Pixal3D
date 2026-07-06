@@ -274,12 +274,13 @@ def run_inference(
 
     # Extract GLB
     print("[Inference] Extracting GLB...")
+    disable_tqdm = os.environ.get("DISABLE_TQDM", "0") == "1"
     glb = o_voxel.postprocess.to_glb(
         vertices=mesh.vertices, faces=mesh.faces, attr_volume=mesh.attrs,
         coords=mesh.coords, attr_layout=pipeline.pbr_attr_layout,
         grid_size=res, aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
         decimation_target=1000000, texture_size=4096,
-        remesh=True, remesh_band=1, remesh_project=0, use_tqdm=True,
+        remesh=True, remesh_band=1, remesh_project=0, use_tqdm=not disable_tqdm,
     )
 
     # Apply rotation

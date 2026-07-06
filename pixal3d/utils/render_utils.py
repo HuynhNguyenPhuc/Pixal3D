@@ -1,3 +1,4 @@
+import os
 import gc
 import torch
 import numpy as np
@@ -71,7 +72,8 @@ def render_frames(sample, extrinsics, intrinsics, options={}, verbose=True, rend
     if renderer is None:
         renderer = get_renderer(sample, **options)
     rets = {}
-    for j, (extr, intr) in tqdm(enumerate(zip(extrinsics, intrinsics)), total=len(extrinsics), desc='Rendering', disable=not verbose):
+    disable_tqdm = os.environ.get("DISABLE_TQDM", "0") == "1"
+    for j, (extr, intr) in tqdm(enumerate(zip(extrinsics, intrinsics)), total=len(extrinsics), desc='Rendering', disable=disable_tqdm or not verbose):
         res = renderer.render(sample, extr, intr, **kwargs)
         for k, v in res.items():
             if k not in rets: rets[k] = []

@@ -1,3 +1,4 @@
+import os
 from typing import *
 import torch
 import numpy as np
@@ -117,7 +118,8 @@ class FlowEulerSampler(Sampler):
         t_seq = t_seq.tolist()
         t_pairs = list((t_seq[i], t_seq[i + 1]) for i in range(steps))
         ret = edict({"samples": None, "pred_x_t": [], "pred_x_0": []})
-        for t, t_prev in tqdm(t_pairs, desc=tqdm_desc, disable=not verbose):
+        disable_tqdm = os.environ.get("DISABLE_TQDM", "0") == "1"
+        for t, t_prev in tqdm(t_pairs, desc=tqdm_desc, disable=disable_tqdm or not verbose):
             out = self.sample_once(model, sample, t, t_prev, cond, **kwargs)
             sample = out.pred_x_prev
             ret.pred_x_t.append(out.pred_x_prev)

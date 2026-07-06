@@ -33,28 +33,37 @@ class Mesh:
         return self.to('cpu')
     
     def fill_holes(self, max_hole_perimeter=3e-2):
+        # Empty cache before heavy CuMesh operations to prevent CUDA out of memory errors
+        torch.cuda.empty_cache()
         vertices = self.vertices.clone().cuda().contiguous()
         faces = self.faces.clone().cuda().contiguous()
         
         mesh = cumesh.CuMesh()
         mesh.init(vertices, faces)
-        mesh.get_edges()
-        mesh.get_boundary_info()
-        if mesh.num_boundaries == 0:
-            return
-        mesh.get_vertex_edge_adjacency()
-        mesh.get_vertex_boundary_adjacency()
-        mesh.get_manifold_boundary_adjacency()
-        mesh.read_manifold_boundary_adjacency()
-        mesh.get_boundary_connected_components()
-        mesh.get_boundary_loops()
-        if mesh.num_boundary_loops == 0:
-            return
-        mesh.fill_holes(max_hole_perimeter=max_hole_perimeter)
-        new_vertices, new_faces = mesh.read()
-        
-        self.vertices = new_vertices.to(self.device)
-        self.faces = new_faces.to(self.device)
+        try:
+            mesh.get_edges()
+            mesh.get_boundary_info()
+            if mesh.num_boundaries == 0:
+                return
+            mesh.get_vertex_edge_adjacency()
+            mesh.get_vertex_boundary_adjacency()
+            mesh.get_manifold_boundary_adjacency()
+            mesh.read_manifold_boundary_adjacency()
+            mesh.get_boundary_connected_components()
+            mesh.get_boundary_loops()
+            if mesh.num_boundary_loops == 0:
+                return
+            mesh.fill_holes(max_hole_perimeter=max_hole_perimeter)
+            new_vertices, new_faces = mesh.read()
+            
+            self.vertices = new_vertices.to(self.device)
+            self.faces = new_faces.to(self.device)
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                print(f"[CuMesh Warning] Out of memory during fill_holes: {e}. Skipping hole filling to prevent crash.")
+                torch.cuda.empty_cache()
+            else:
+                raise e
         
     def remove_faces(self, face_mask: torch.Tensor):
         vertices = self.vertices.clone().cuda().contiguous()
@@ -69,16 +78,24 @@ class Mesh:
         self.faces = new_faces.to(self.device)
         
     def simplify(self, target=1000000, verbose: bool=False, options: dict={}):
+        torch.cuda.empty_cache()
         vertices = self.vertices.clone().cuda().contiguous()
         faces = self.faces.clone().cuda().contiguous()
         
         mesh = cumesh.CuMesh()
         mesh.init(vertices, faces)
-        mesh.simplify(target, verbose=verbose, options=options)
-        new_vertices, new_faces = mesh.read()
-        
-        self.vertices = new_vertices.to(self.device)
-        self.faces = new_faces.to(self.device)
+        try:
+            mesh.simplify(target, verbose=verbose, options=options)
+            new_vertices, new_faces = mesh.read()
+            
+            self.vertices = new_vertices.to(self.device)
+            self.faces = new_faces.to(self.device)
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                print(f"[CuMesh Warning] Out of memory during simplify: {e}. Skipping simplification to prevent crash.")
+                torch.cuda.empty_cache()
+            else:
+                raise e
 
 
 class TextureFilterMode:
