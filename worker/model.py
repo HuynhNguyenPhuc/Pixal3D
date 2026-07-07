@@ -1,7 +1,7 @@
 """Model worker for Pixal3D generation tasks."""
 
 import os
-os.environ.setdefault('ATTN_BACKEND', 'flash_attn_3')
+os.environ.setdefault('ATTN_BACKEND', 'sdpa')
 
 import gc
 import time
@@ -28,9 +28,11 @@ IMAGE_COND_CONFIGS = {
     'shape_1024': {'model_name': 'camenduru/dinov3-vitl16-pretrain-lvd1689m', 'image_size': 1024, 'grid_resolution': 64, 'use_naf_upsample': True, 'naf_target_size': 512},
     'tex_1024': {'model_name': 'camenduru/dinov3-vitl16-pretrain-lvd1689m', 'image_size': 1024, 'grid_resolution': 64, 'use_naf_upsample': True, 'naf_target_size': 1024},
 }
+
 WILD_MESH_SCALE = 1.0
 WILD_EXTEND_PIXEL = 0
 WILD_IMAGE_RESOLUTION = 512
+
 
 def build_image_cond_model(config):
     from pixal3d.trainers.flow_matching.mixins.image_conditioned_proj import DinoV3ProjFeatureExtractor
@@ -130,16 +132,30 @@ class ModelWorker:
         temp_path = os.path.join(self.save_dir, f'{uid}_temp.png')
         image.save(temp_path)
         
-        # Load moge to GPU temporarily
-        self.moge_model.to('cuda')
-        camera_params = get_camera_params_wild_moge(
-            temp_path, device='cuda',
-            mesh_scale=WILD_MESH_SCALE, extend_pixel=WILD_EXTEND_PIXEL,
-            image_resolution=WILD_IMAGE_RESOLUTION,
-            moge_model=self.moge_model
-        )
-        # Unload back to CPU to save memory for pipeline
-        self.moge_model.cpu()
+        fov = params.get("fov", -1.0)
+        if fov > 0:
+            camera_angle_x = float(fov)
+            grid_point = torch.tensor([-1.0, 0.0, 0.0])
+            from inference import distance_from_fov
+            distance = distance_from_fov(
+                camera_angle_x, grid_point,
+                torch.tensor([0 - WILD_EXTEND_PIXEL, WILD_IMAGE_RESOLUTION - 1 + WILD_EXTEND_PIXEL]),
+                WILD_MESH_SCALE, WILD_IMAGE_RESOLUTION
+            )["distance_from_x"]
+            camera_params = {'camera_angle_x': camera_angle_x, 'distance': distance, 'mesh_scale': WILD_MESH_SCALE}
+            self.logger.info(f"Using manual FOV: {camera_angle_x:.4f} rad, distance: {distance:.4f}")
+        else:
+            # Load moge to GPU temporarily
+            self.moge_model.to('cuda')
+            camera_params = get_camera_params_wild_moge(
+                temp_path, device='cuda',
+                mesh_scale=WILD_MESH_SCALE, extend_pixel=WILD_EXTEND_PIXEL,
+                image_resolution=WILD_IMAGE_RESOLUTION,
+                moge_model=self.moge_model
+            )
+            # Unload back to CPU to save memory for pipeline
+            self.moge_model.cpu()
+            
         os.remove(temp_path)
 
         outputs = self.pipeline.run(

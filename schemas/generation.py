@@ -47,6 +47,7 @@ class GenerationRequest(BaseModel):
     tex_slat_guidance_rescale: float = Field(0.0, description="Guidance rescale for texture SLat sampling", ge=0.0, le=1.0)
     tex_slat_sampling_steps: int = Field(12, description="Number of sampling steps for texture SLat", ge=1, le=50)
     tex_slat_rescale_t: float = Field(3.0, description="Rescale T for texture SLat sampling", ge=1.0, le=6.0)
+    fov: float = Field(-1.0, description="Manual camera FOV in radians. Set to -1.0 for automatic estimation.", ge=-1.0, le=3.0)
 
 
 class GenerationResponse(BaseModel):

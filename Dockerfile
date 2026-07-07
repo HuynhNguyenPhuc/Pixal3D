@@ -75,15 +75,15 @@ COPY requirements-hfdemo.txt /app/
 # Install Python packages using pre-built binary wheels (including o_voxel, cumesh, etc.)
 RUN pip install --no-cache-dir -r requirements-hfdemo.txt
 
-# Build and install natten directly (optimized for A100 by targeting CC 8.0)
+# Build and install natten from source targeting multiple CUDA architectures
 ARG NATTEN_CUDA_ARCH="8.0"
-RUN NATTEN_CUDA_ARCH="${NATTEN_CUDA_ARCH}" NATTEN_N_WORKERS=$(nproc) pip install natten==0.21.0 --no-build-isolation
+RUN NATTEN_CUDA_ARCH="${NATTEN_CUDA_ARCH}" NATTEN_N_WORKERS=$(nproc) pip install --no-cache-dir natten==0.21.0 --no-build-isolation
 
 # Install utils3d as specified in the project documentation
 RUN pip install --no-cache-dir https://github.com/LDYang694/Storages/releases/download/20260430/utils3d-0.0.2-py3-none-any.whl
 
 # Copy only the necessary folders and files for API and Worker to run
-COPY app.py app_state.py config.py constants.py inference.py /app/
+COPY app.py app_state.py config.py constants.py inference.py gradio_app.py index.html /app/
 COPY pixal3d /app/pixal3d
 COPY broker /app/broker
 COPY controllers /app/controllers
@@ -92,6 +92,7 @@ COPY routes /app/routes
 COPY schemas /app/schemas
 COPY utilities /app/utilities
 COPY worker /app/worker
+COPY assets /app/assets
 
 # Create cache directory
 RUN mkdir -p /app/gradio_cache
@@ -107,7 +108,7 @@ ENV MAX_IMAGE_SIZE=8388608 \
     REDIS_HOST=localhost \
     REDIS_PORT=6379 \
     REDIS_DB=0 \
-    ATTN_BACKEND=flash_attn_3 \
+    ATTN_BACKEND=sdpa \
     DISABLE_TQDM=1
 
 # Health check
