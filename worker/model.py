@@ -10,10 +10,12 @@ import uuid
 from PIL import Image
 
 import torch
+import trimesh
 
 import o_voxel
 import numpy as np
 
+import config
 from pixal3d.pipelines import Pixal3DImageTo3DPipeline
 from inference import get_camera_params_wild_moge
 from utilities.image import convert_to_pil_image
@@ -177,10 +179,28 @@ class ModelWorker:
         
         mesh = mesh_list[0]
 
+        # Free heavy sparse latents and other intermediate structures that are no longer needed for triangulation to save massive GPU VRAM.
+        del shape_slat, tex_slat, mesh_list
+        aggressive_gpu_cleanup()
+
         # Clean vertices and faces to prevent cumesh illegal memory access from degenerate geometry
         self.logger.info(f"Cleaning mesh vertices/faces before exporting GLB (input: {mesh.vertices.shape[0]:,} vertices, {mesh.faces.shape[0]:,} faces)...")
         mesh_vertices, mesh_faces = clean_mesh_vertices_faces(mesh.vertices, mesh.faces)
         self.logger.info(f"Mesh cleaned (output: {mesh_vertices.shape[0]:,} vertices, {mesh_faces.shape[0]:,} faces)")
+
+        # Proactive CPU Simplification Safeguard
+        # If the cleaned mesh has >= SIMPLIFICATION_THRESHOLD_FACES faces, reduce it to SIMPLIFICATION_TARGET_FACES faces on CPU to prevent GPU OOM while keeping the reconstruction grid_size at exactly 1536.
+        if mesh_faces.shape[0] >= config.SIMPLIFICATION_THRESHOLD_FACES:
+            self.logger.info(f"Proactive Safeguard: Mesh has >= {config.SIMPLIFICATION_THRESHOLD_FACES:,} faces ({mesh_faces.shape[0]:,} faces). Simplifying to {config.SIMPLIFICATION_TARGET_FACES:,} faces on CPU to prevent GPU OOM...")
+            try:
+                device = mesh_vertices.device
+                tm = trimesh.Trimesh(vertices=mesh_vertices.cpu().numpy(), faces=mesh_faces.cpu().numpy(), process=False)
+                tm = tm.simplify_quadric_decimation(config.SIMPLIFICATION_TARGET_FACES)
+                mesh_vertices = torch.from_numpy(tm.vertices).float().to(device)
+                mesh_faces = torch.from_numpy(tm.faces).int().to(device)
+                self.logger.info(f"Proactive CPU Simplification complete. New face count: {mesh_faces.shape[0]:,}")
+            except Exception as e:
+                self.logger.warning(f"Proactive CPU Simplification failed: {e}. Proceeding with original density.")
 
         try:
             glb = o_voxel.postprocess.to_glb(
@@ -208,14 +228,41 @@ class ModelWorker:
                 # Clean up GPU memory before retrying the export.
                 aggressive_gpu_cleanup()
 
-                glb = o_voxel.postprocess.to_glb(
-                    vertices=mesh_vertices, faces=mesh_faces, attr_volume=mesh.attrs,
-                    coords=mesh.coords, attr_layout=self.pipeline.pbr_attr_layout,
-                    grid_size=res, 
-                    aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
-                    decimation_target=decimation_target, texture_size=texture_size,
-                    remesh=False, remesh_band=1, remesh_project=0, use_tqdm=False,
-                )
+                try:
+                    glb = o_voxel.postprocess.to_glb(
+                        vertices=mesh_vertices, faces=mesh_faces, attr_volume=mesh.attrs,
+                        coords=mesh.coords, attr_layout=self.pipeline.pbr_attr_layout,
+                        grid_size=res, 
+                        aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+                        decimation_target=decimation_target, texture_size=texture_size,
+                        remesh=False, remesh_band=1, remesh_project=0, use_tqdm=False,
+                    )
+                except RuntimeError as exc_fallback:
+                    exc_fallback_str = str(exc_fallback).lower()
+                    if "out of memory" in exc_fallback_str or "cuda error" in exc_fallback_str:
+                        self.logger.warning(f"OOM during to_glb no-remesh fallback for uid={uid}. Attempting CPU-decimation fallback and lowering texture size to prevent worker crash.")
+                        aggressive_gpu_cleanup()
+                        
+                        import trimesh
+                        device = mesh_vertices.device
+                        tm = trimesh.Trimesh(vertices=mesh_vertices.cpu().numpy(), faces=mesh_faces.cpu().numpy(), process=False)
+                        cpu_target = max(decimation_target, 200000)
+                        self.logger.info(f"Simplifying mesh on CPU to {cpu_target:,} faces...")
+                        tm = tm.simplify_quadric_decimation(cpu_target)
+                        
+                        mesh_vertices_fallback = torch.from_numpy(tm.vertices).float().to(device)
+                        mesh_faces_fallback = torch.from_numpy(tm.faces).int().to(device)
+                        
+                        self.logger.info("Retrying to_glb on CPU-simplified mesh (no remesh, 1024 texture)...")
+                        glb = o_voxel.postprocess.to_glb(
+                            vertices=mesh_vertices_fallback, faces=mesh_faces_fallback, attr_volume=mesh.attrs,
+                            coords=mesh.coords, attr_layout=self.pipeline.pbr_attr_layout,
+                            grid_size=res, aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+                            decimation_target=decimation_target, texture_size=min(texture_size, 1024),
+                            remesh=False, remesh_band=1, remesh_project=0, use_tqdm=False,
+                        )
+                    else:
+                        raise exc_fallback
         
         rot = np.array([
             [ 1,  0,  0,  0],

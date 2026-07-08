@@ -11,6 +11,7 @@ import mimetypes
 import warnings
 import argparse
 import threading
+import trimesh
 import subprocess as _sp
 from typing import Dict, List, Tuple, Any, Optional
 
@@ -18,6 +19,8 @@ import cv2
 import torch
 import numpy as np
 from PIL import Image
+
+import config
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -823,6 +826,11 @@ def generate_3d(
         mesh = mesh_list[0]
         state_path = pack_state(shape_slat, tex_slat, res, model_id=model_id)
         
+        # Free heavy sparse latents and other intermediate structures to maximize VRAM for rendering/export
+        del shape_slat, tex_slat, mesh_list
+        from utilities.gpu import aggressive_gpu_cleanup
+        aggressive_gpu_cleanup()
+        
         # Render previews of intermediate outputs
         _update_progress("Rendering views", 0, 1)
         mesh.simplify(16777216)
@@ -899,6 +907,11 @@ def extract_glb_api(state_path: str, decimation_target: int, texture_size: int, 
         mesh = pipeline.decode_latent(shape_slat, tex_slat, res)[0]
         _update_progress("Decoding latent", 1, 1)
         
+        # Free heavy sparse latents that are no longer needed for triangulation to save massive GPU VRAM.
+        del shape_slat, tex_slat
+        from utilities.gpu import aggressive_gpu_cleanup
+        aggressive_gpu_cleanup()
+        
         # Clean vertices and faces to prevent cumesh illegal memory access from degenerate geometry
         try:
             from utilities.gpu import clean_mesh_vertices_faces
@@ -907,13 +920,71 @@ def extract_glb_api(state_path: str, decimation_target: int, texture_size: int, 
             print(f"Warning: Failed to clean mesh with clean_mesh_vertices_faces: {e}")
             mesh_vertices, mesh_faces = mesh.vertices, mesh.faces
 
-        glb = o_voxel.postprocess.to_glb(
-            vertices=mesh_vertices, faces=mesh_faces, attr_volume=mesh.attrs,
-            coords=mesh.coords, attr_layout=pipeline.pbr_attr_layout,
-            grid_size=res, aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
-            decimation_target=decimation_target, texture_size=texture_size,
-            remesh=True, remesh_band=1, remesh_project=0, use_tqdm=True,
-        )
+        # Proactive CPU Simplification Safeguard:
+        # If the cleaned mesh has >= SIMPLIFICATION_THRESHOLD_FACES faces, reduce it to SIMPLIFICATION_TARGET_FACES faces on CPU to prevent GPU OOM
+        # while keeping the reconstruction grid_size at exactly 1536.
+        if mesh_faces.shape[0] >= config.SIMPLIFICATION_THRESHOLD_FACES:
+            print(f"Proactive Safeguard: Mesh has >= {config.SIMPLIFICATION_THRESHOLD_FACES:,} faces ({mesh_faces.shape[0]:,} faces). Simplifying to {config.SIMPLIFICATION_TARGET_FACES:,} faces on CPU to prevent GPU OOM...")
+            try:
+                device = mesh_vertices.device
+                tm = trimesh.Trimesh(vertices=mesh_vertices.cpu().numpy(), faces=mesh_faces.cpu().numpy(), process=False)
+                tm = tm.simplify_quadric_decimation(config.SIMPLIFICATION_TARGET_FACES)
+                mesh_vertices = torch.from_numpy(tm.vertices).float().to(device)
+                mesh_faces = torch.from_numpy(tm.faces).int().to(device)
+                print(f"Proactive CPU Simplification complete. New face count: {mesh_faces.shape[0]:,}")
+            except Exception as e:
+                print(f"Proactive CPU Simplification failed: {e}. Proceeding with original density.")
+
+        try:
+            glb = o_voxel.postprocess.to_glb(
+                vertices=mesh_vertices, faces=mesh_faces, attr_volume=mesh.attrs,
+                coords=mesh.coords, attr_layout=pipeline.pbr_attr_layout,
+                grid_size=res, aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+                decimation_target=decimation_target, texture_size=texture_size,
+                remesh=True, remesh_band=1, remesh_project=0, use_tqdm=True,
+            )
+        except RuntimeError as exc:
+            exc_str = str(exc).lower()
+            if "out of memory" in exc_str or "cuda error" in exc_str:
+                print("[OOM] OOM during to_glb remesh. Retrying without remesh...")
+                aggressive_gpu_cleanup()
+                
+                try:
+                    glb = o_voxel.postprocess.to_glb(
+                        vertices=mesh_vertices, faces=mesh_faces, attr_volume=mesh.attrs,
+                        coords=mesh.coords, attr_layout=pipeline.pbr_attr_layout,
+                        grid_size=res, aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+                        decimation_target=decimation_target, texture_size=texture_size,
+                        remesh=False, remesh_band=1, remesh_project=0, use_tqdm=True,
+                    )
+                except RuntimeError as exc_fallback:
+                    exc_fallback_str = str(exc_fallback).lower()
+                    if "out of memory" in exc_fallback_str or "cuda error" in exc_fallback_str:
+                        print("[OOM] OOM during to_glb fallback. Attempting CPU decimation fallback...")
+                        aggressive_gpu_cleanup()
+                        
+                        import trimesh
+                        device = mesh_vertices.device
+                        tm = trimesh.Trimesh(vertices=mesh_vertices.cpu().numpy(), faces=mesh_faces.cpu().numpy(), process=False)
+                        cpu_target = max(decimation_target, 200000)
+                        print(f"Simplifying mesh on CPU to {cpu_target:,} faces...")
+                        tm = tm.simplify_quadric_decimation(cpu_target)
+                        
+                        mesh_vertices_fallback = torch.from_numpy(tm.vertices).float().to(device)
+                        mesh_faces_fallback = torch.from_numpy(tm.faces).int().to(device)
+                        
+                        print("Retrying to_glb on CPU-simplified mesh (no remesh, 1024 texture)...")
+                        glb = o_voxel.postprocess.to_glb(
+                            vertices=mesh_vertices_fallback, faces=mesh_faces_fallback, attr_volume=mesh.attrs,
+                            coords=mesh.coords, attr_layout=pipeline.pbr_attr_layout,
+                            grid_size=res, aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+                            decimation_target=decimation_target, texture_size=min(texture_size, 1024),
+                            remesh=False, remesh_band=1, remesh_project=0, use_tqdm=True,
+                        )
+                    else:
+                        raise exc_fallback
+            else:
+                raise exc
     except (torch.OutOfMemoryError, RuntimeError) as e:
         if "out of memory" in str(e).lower() or isinstance(e, torch.OutOfMemoryError):
             print("[OOM] CUDA Out of Memory during GLB extraction. Purging cache...")

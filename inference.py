@@ -312,6 +312,11 @@ def run_inference(
     )
     mesh = mesh_list[0]
 
+    # Free heavy sparse latents that are no longer needed for triangulation to save massive GPU VRAM.
+    del shape_slat, tex_slat
+    from utilities.gpu import aggressive_gpu_cleanup
+    aggressive_gpu_cleanup()
+
     # Clean vertices and faces to prevent cumesh illegal memory access from degenerate geometry
     try:
         from utilities.gpu import clean_mesh_vertices_faces
