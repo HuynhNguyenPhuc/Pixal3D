@@ -251,6 +251,8 @@ def task_consumer_daemon() -> None:
                 "tex_slat_guidance_rescale": float(data.get("tex_slat_guidance_rescale", 0.0)),
                 "tex_slat_sampling_steps": int(data.get("tex_slat_sampling_steps", 12)),
                 "tex_slat_rescale_t": float(data.get("tex_slat_rescale_t", 3.0)),
+                "fov": float(data.get("fov", -1.0)),
+                "no_webp": data.get("no_webp", "true").lower() in ("true", "1"),
             }
 
             # Flag to track if execution has started, used for retry logic and DLQ handling.

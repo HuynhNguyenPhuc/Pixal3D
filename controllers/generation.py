@@ -47,6 +47,8 @@ def build_generation_params(request: GenerationRequest) -> dict:
         "tex_slat_guidance_rescale": request.tex_slat_guidance_rescale,
         "tex_slat_sampling_steps": request.tex_slat_sampling_steps,
         "tex_slat_rescale_t": request.tex_slat_rescale_t,
+        "fov": request.fov,
+        "no_webp": str(request.no_webp).lower(),
     }
 
 

@@ -96,7 +96,12 @@ class ModelWorker:
         # Hardcode resolution to 1536 for best quality as requested
         resolution = 1536
         decimation_target = params.get("decimation_target", 500000)
-        texture_size = params.get("texture_size", 2048)
+        texture_size = params.get("texture_size", 4096)
+        no_webp_val = params.get("no_webp", True)
+        if isinstance(no_webp_val, str):
+            no_webp = no_webp_val.lower() in ("true", "1")
+        else:
+            no_webp = bool(no_webp_val)
         
         ss_sampler_params = {
             'steps': params.get("ss_sampling_steps", 12),
@@ -158,7 +163,7 @@ class ModelWorker:
             
         os.remove(temp_path)
 
-        outputs = self.pipeline.run(
+        mesh_list, (shape_slat, tex_slat, res) = self.pipeline.run(
             image,
             camera_params=camera_params,
             seed=seed,
@@ -166,16 +171,17 @@ class ModelWorker:
             sparse_structure_sampler_params=ss_sampler_params,
             shape_slat_sampler_params=shape_sampler_params,
             tex_slat_sampler_params=tex_sampler_params,
+            return_latent=True,
             pipeline_type=pipeline_type,
         )
         
-        mesh = outputs[0]
+        mesh = mesh_list[0]
 
         try:
             glb = o_voxel.postprocess.to_glb(
                 vertices=mesh.vertices, faces=mesh.faces, attr_volume=mesh.attrs,
                 coords=mesh.coords, attr_layout=self.pipeline.pbr_attr_layout,
-                grid_size=1024 if resolution >= 1024 else 512, 
+                grid_size=res, 
                 aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
                 decimation_target=decimation_target, texture_size=texture_size,
                 remesh=True, remesh_band=1, remesh_project=0, use_tqdm=False,
@@ -195,7 +201,7 @@ class ModelWorker:
                 glb = o_voxel.postprocess.to_glb(
                     vertices=mesh.vertices, faces=mesh.faces, attr_volume=mesh.attrs,
                     coords=mesh.coords, attr_layout=self.pipeline.pbr_attr_layout,
-                    grid_size=1024 if resolution >= 1024 else 512, 
+                    grid_size=res, 
                     aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
                     decimation_target=decimation_target, texture_size=texture_size,
                     remesh=False, remesh_band=1, remesh_project=0, use_tqdm=False,
@@ -210,7 +216,7 @@ class ModelWorker:
         glb.apply_transform(rot)
 
         output_path = os.path.join(self.save_dir, f'{uid}.glb')
-        glb.export(output_path, extension_webp=True)
+        glb.export(output_path, extension_webp=not no_webp)
 
         end_time = time.time()
         self.logger.info(f'Task {uid}: generation completed in {end_time - start_time:.2f} seconds.')
