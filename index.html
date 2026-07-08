@@ -802,6 +802,12 @@
                             <label>Decimation <span><span id="decimation_val">0.2M</span></span></label>
                             <input type="range" id="decimation" min="100000" max="1000000" step="10000" value="200000" oninput="updateVal('decimation')">
                         </div>
+                        <div class="input-wrapper" style="margin-top: 0.5rem;">
+                            <label style="display: flex; align-items: center; justify-content: space-between; cursor: pointer; font-size: 0.85rem;">
+                                <span style="font-weight: 500;">Disable WebP (Max Compatibility)</span>
+                                <input type="checkbox" id="no-webp" style="accent-color: var(--primary); width: 14px; height: 14px; cursor: pointer;">
+                            </label>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -892,7 +898,7 @@
                             <model-viewer id="compare-3d-viewer" 
                                 camera-controls 
                                 auto-rotate 
-                                camera-orbit="-180deg 90deg auto"
+                                camera-orbit="0deg 90deg auto"
                                 shadow-intensity="1.5" 
                                 environment-image="neutral" 
                                 exposure="1.2"
@@ -917,7 +923,7 @@
                             <model-viewer id="main-3d-viewer" 
                                 camera-controls 
                                 auto-rotate 
-                                camera-orbit="-180deg 90deg auto"
+                                camera-orbit="0deg 90deg auto"
                                 shadow-intensity="1.5" 
                                 environment-image="neutral" 
                                 exposure="1.2"
@@ -1409,7 +1415,7 @@
             newMv.id = 'main-3d-viewer';
             newMv.setAttribute('camera-controls', '');
             newMv.setAttribute('auto-rotate', '');
-            newMv.setAttribute('camera-orbit', '-180deg 90deg auto');
+            newMv.setAttribute('camera-orbit', '0deg 90deg auto');
             newMv.setAttribute('shadow-intensity', '1.5');
             newMv.setAttribute('environment-image', 'neutral');
             newMv.setAttribute('exposure', '1.2');
@@ -1442,6 +1448,7 @@
                     state_path: generationResult.state_path,
                     decimation_target: parseInt(document.getElementById('decimation').value),
                     texture_size: 2048,
+                    no_webp: document.getElementById('no-webp').checked,
                     session_id: currentModelId
                 };
 

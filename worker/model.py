@@ -18,7 +18,7 @@ from pixal3d.pipelines import Pixal3DImageTo3DPipeline
 from inference import get_camera_params_wild_moge
 from utilities.image import convert_to_pil_image
 from utilities.logger import get_logger
-from utilities.gpu import aggressive_gpu_cleanup
+from utilities.gpu import aggressive_gpu_cleanup, clean_mesh_vertices_faces
 
 
 # Minimal mocks for IMAGE_COND_CONFIGS
@@ -177,9 +177,14 @@ class ModelWorker:
         
         mesh = mesh_list[0]
 
+        # Clean vertices and faces to prevent cumesh illegal memory access from degenerate geometry
+        self.logger.info(f"Cleaning mesh vertices/faces before exporting GLB (input: {mesh.vertices.shape[0]:,} vertices, {mesh.faces.shape[0]:,} faces)...")
+        mesh_vertices, mesh_faces = clean_mesh_vertices_faces(mesh.vertices, mesh.faces)
+        self.logger.info(f"Mesh cleaned (output: {mesh_vertices.shape[0]:,} vertices, {mesh_faces.shape[0]:,} faces)")
+
         try:
             glb = o_voxel.postprocess.to_glb(
-                vertices=mesh.vertices, faces=mesh.faces, attr_volume=mesh.attrs,
+                vertices=mesh_vertices, faces=mesh_faces, attr_volume=mesh.attrs,
                 coords=mesh.coords, attr_layout=self.pipeline.pbr_attr_layout,
                 grid_size=res, 
                 aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
@@ -188,10 +193,15 @@ class ModelWorker:
             )
         except RuntimeError as exc:
             exc_str = str(exc).lower()
+            if (("cuda error" in exc_str or "cumesh" in exc_str) and "out of memory" not in exc_str) or "illegal memory access" in exc_str or "device-side assertion" in exc_str:
+                self.logger.error(f"Fatal CUDA/CuMesh error: {exc_str}. Marking for restart.")
+                import app_state
+                app_state.needs_subprocess_restart = True
+                raise exc
             if "out of memory" in exc_str or "cuda error" in exc_str:
                 self.logger.warning(
                     f"OOM during to_glb remesh for uid={uid} "
-                    f"({mesh.faces.shape[0]:,} faces); "
+                    f"({mesh_faces.shape[0]:,} faces); "
                     f"retrying without remesh"
                 )
 
@@ -199,7 +209,7 @@ class ModelWorker:
                 aggressive_gpu_cleanup()
 
                 glb = o_voxel.postprocess.to_glb(
-                    vertices=mesh.vertices, faces=mesh.faces, attr_volume=mesh.attrs,
+                    vertices=mesh_vertices, faces=mesh_faces, attr_volume=mesh.attrs,
                     coords=mesh.coords, attr_layout=self.pipeline.pbr_attr_layout,
                     grid_size=res, 
                     aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
@@ -208,9 +218,9 @@ class ModelWorker:
                 )
         
         rot = np.array([
-            [-1,  0,  0,  0],
+            [ 1,  0,  0,  0],
             [ 0,  0, -1,  0],
-            [ 0, -1,  0,  0],
+            [ 0,  1,  0,  0],
             [ 0,  0,  0,  1],
         ], dtype=np.float64)
         glb.apply_transform(rot)

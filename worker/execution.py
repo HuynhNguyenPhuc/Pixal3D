@@ -255,6 +255,11 @@ def run_worker(
         # Print the full traceback for debugging purposes.
         traceback.print_exc()
 
+        exc_str = error_msg.lower()
+        if (("cuda error" in exc_str or "cumesh" in exc_str) and "out of memory" not in exc_str) or "illegal memory access" in exc_str or "device-side assertion" in exc_str:
+            logger.critical(f"Fatal CUDA/CuMesh error: {error_msg}. Flagging worker subprocess restart.")
+            app_state.needs_subprocess_restart = True
+
         # Classify the error to determine whether it is retriable or resource-related.
         classified = classify_task_error(exc, params)
 

@@ -138,9 +138,20 @@ def main():
     # 4. Export GLB with PBR textures
     print("[Step 4] Extracting textured GLB...")
     os.makedirs(output_dir, exist_ok=True)
+    
+    # Clean vertices and faces to prevent cumesh illegal memory access from degenerate geometry
+    try:
+        import sys
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from utilities.gpu import clean_mesh_vertices_faces
+        mesh_vertices, mesh_faces = clean_mesh_vertices_faces(mesh_with_voxel.vertices, mesh_with_voxel.faces)
+    except Exception as e:
+        print(f"Warning: Failed to clean mesh with clean_mesh_vertices_faces: {e}")
+        mesh_vertices, mesh_faces = mesh_with_voxel.vertices, mesh_with_voxel.faces
+
     glb = o_voxel.postprocess.to_glb(
-        vertices=mesh_with_voxel.vertices,
-        faces=mesh_with_voxel.faces,
+        vertices=mesh_vertices,
+        faces=mesh_faces,
         attr_volume=mesh_with_voxel.attrs,
         coords=mesh_with_voxel.coords,
         attr_layout=PBR_ATTR_LAYOUT,
