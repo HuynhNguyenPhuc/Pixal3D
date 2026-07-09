@@ -911,74 +911,77 @@ def extract_glb_api(state_path: str, decimation_target: int, texture_size: int, 
         del shape_slat, tex_slat
         from utilities.gpu import aggressive_gpu_cleanup, simplify_mesh, clean_mesh
         aggressive_gpu_cleanup()
-        
-        mesh_vertices = mesh.vertices
-        mesh_faces = mesh.faces
-
-        # Always run GPU-based clean to prevent CuMesh illegal memory access on degenerate meshes
-        mesh_vertices, mesh_faces = clean_mesh(mesh_vertices, mesh_faces)
-
-        if mesh_faces.shape[0] >= config.SIMPLIFICATION_THRESHOLD_FACES:
-            print(f"Proactive Safeguard: Mesh has >= {config.SIMPLIFICATION_THRESHOLD_FACES:,} faces ({mesh_faces.shape[0]:,} faces). Simplifying to {config.SIMPLIFICATION_TARGET_FACES:,} faces on GPU to prevent OOM...")
-            try:
-                mesh_vertices, mesh_faces = simplify_mesh(mesh_vertices, mesh_faces, config.SIMPLIFICATION_TARGET_FACES)
-                print(f"Proactive GPU Simplification complete. New face count: {mesh_faces.shape[0]:,}")
-            except BaseException as e:
-                print(f"Proactive GPU Simplification failed: {type(e).__name__} - {e}. Proceeding with original density.")
 
         try:
-            glb = o_voxel.postprocess.to_glb(
-                vertices=mesh_vertices, faces=mesh_faces, attr_volume=mesh.attrs,
-                coords=mesh.coords, attr_layout=pipeline.pbr_attr_layout,
-                grid_size=res, aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
-                decimation_target=decimation_target, texture_size=texture_size,
-                remesh=True, remesh_band=1, remesh_project=0, use_tqdm=True,
-            )
-        except Exception as exc:
-            exc_str = str(exc).lower()
-            is_oom = "out of memory" in exc_str or "cuda error" in exc_str or isinstance(exc, torch.OutOfMemoryError)
-            
-            if is_oom:
-                print("[OOM] OOM during to_glb remesh. Retrying without remesh...")
-                aggressive_gpu_cleanup()
-                
+            mesh_vertices = mesh.vertices
+            mesh_faces = mesh.faces
+
+            # Always run GPU-based clean to prevent CuMesh illegal memory access on degenerate meshes
+            mesh_vertices, mesh_faces = clean_mesh(mesh_vertices, mesh_faces)
+
+            if mesh_faces.shape[0] >= config.SIMPLIFICATION_THRESHOLD_FACES:
+                print(f"Proactive Safeguard: Mesh has >= {config.SIMPLIFICATION_THRESHOLD_FACES:,} faces ({mesh_faces.shape[0]:,} faces). Simplifying to {config.SIMPLIFICATION_TARGET_FACES:,} faces on GPU to prevent OOM...")
                 try:
-                    glb = o_voxel.postprocess.to_glb(
-                        vertices=mesh_vertices, faces=mesh_faces, attr_volume=mesh.attrs,
-                        coords=mesh.coords, attr_layout=pipeline.pbr_attr_layout,
-                        grid_size=res, aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
-                        decimation_target=decimation_target, texture_size=texture_size,
-                        remesh=False, remesh_band=1, remesh_project=0, use_tqdm=True,
-                    )
-                except Exception as exc_fallback:
-                    exc_fallback_str = str(exc_fallback).lower()
-                    is_fallback_oom = "out of memory" in exc_fallback_str or "cuda error" in exc_fallback_str or isinstance(exc_fallback, torch.OutOfMemoryError)
+                    mesh_vertices, mesh_faces = simplify_mesh(mesh_vertices, mesh_faces, config.SIMPLIFICATION_TARGET_FACES)
+                    print(f"Proactive GPU Simplification complete. New face count: {mesh_faces.shape[0]:,}")
+                except BaseException as e:
+                    print(f"Proactive GPU Simplification failed: {type(e).__name__} - {e}. Proceeding with original density.")
+
+            try:
+                glb = o_voxel.postprocess.to_glb(
+                    vertices=mesh_vertices, faces=mesh_faces, attr_volume=mesh.attrs,
+                    coords=mesh.coords, attr_layout=pipeline.pbr_attr_layout,
+                    grid_size=res, aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+                    decimation_target=decimation_target, texture_size=texture_size,
+                    remesh=True, remesh_band=1, remesh_project=0, use_tqdm=True,
+                )
+            except Exception as exc:
+                exc_str = str(exc).lower()
+                is_oom = "out of memory" in exc_str or "cuda error" in exc_str or isinstance(exc, torch.OutOfMemoryError)
+                
+                if is_oom:
+                    print("[OOM] OOM during to_glb remesh. Retrying without remesh...")
+                    aggressive_gpu_cleanup()
                     
-                    if is_fallback_oom:
-                        print("[OOM] OOM during to_glb fallback. Attempting GPU-decimation fallback and lowering texture size...")
-                        aggressive_gpu_cleanup()
-                        
-                        gpu_target = max(decimation_target, 200000)
-                        
-                        try:
-                            print(f"Simplifying mesh on GPU to {gpu_target:,} faces...")
-                            mesh_vertices_fallback, mesh_faces_fallback = simplify_mesh(mesh_vertices, mesh_faces, gpu_target)
-                        except BaseException as e_gpu:
-                            print(f"Fallback GPU Simplification failed: {type(e_gpu).__name__} - {e_gpu}. Proceeding with original density.")
-                            mesh_vertices_fallback, mesh_faces_fallback = mesh_vertices, mesh_faces
-                        
-                        print("Retrying to_glb on simplified mesh (no remesh, 1024 texture)...")
+                    try:
                         glb = o_voxel.postprocess.to_glb(
-                            vertices=mesh_vertices_fallback, faces=mesh_faces_fallback, attr_volume=mesh.attrs,
+                            vertices=mesh_vertices, faces=mesh_faces, attr_volume=mesh.attrs,
                             coords=mesh.coords, attr_layout=pipeline.pbr_attr_layout,
                             grid_size=res, aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
-                            decimation_target=decimation_target, texture_size=min(texture_size, 1024),
+                            decimation_target=decimation_target, texture_size=texture_size,
                             remesh=False, remesh_band=1, remesh_project=0, use_tqdm=True,
                         )
-                    else:
-                        raise exc_fallback
-            else:
-                raise exc
+                    except Exception as exc_fallback:
+                        exc_fallback_str = str(exc_fallback).lower()
+                        is_fallback_oom = "out of memory" in exc_fallback_str or "cuda error" in exc_fallback_str or isinstance(exc_fallback, torch.OutOfMemoryError)
+                        
+                        if is_fallback_oom:
+                            print("[OOM] OOM during to_glb fallback. Attempting GPU-decimation fallback and lowering texture size...")
+                            aggressive_gpu_cleanup()
+                            
+                            gpu_target = max(decimation_target, 200000)
+                            
+                            try:
+                                print(f"Simplifying mesh on GPU to {gpu_target:,} faces...")
+                                mesh_vertices_fallback, mesh_faces_fallback = simplify_mesh(mesh_vertices, mesh_faces, gpu_target)
+                            except BaseException as e_gpu:
+                                print(f"Fallback GPU Simplification failed: {type(e_gpu).__name__} - {e_gpu}. Proceeding with original density.")
+                                mesh_vertices_fallback, mesh_faces_fallback = mesh_vertices, mesh_faces
+                            
+                            print("Retrying to_glb on simplified mesh (no remesh, 1024 texture)...")
+                            glb = o_voxel.postprocess.to_glb(
+                                vertices=mesh_vertices_fallback, faces=mesh_faces_fallback, attr_volume=mesh.attrs,
+                                coords=mesh.coords, attr_layout=pipeline.pbr_attr_layout,
+                                grid_size=res, aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+                                decimation_target=decimation_target, texture_size=min(texture_size, 1024),
+                                remesh=False, remesh_band=1, remesh_project=0, use_tqdm=True,
+                            )
+                        else:
+                            raise exc_fallback
+                else:
+                    raise exc
+        finally:
+            aggressive_gpu_cleanup()
     except (torch.OutOfMemoryError, RuntimeError) as e:
         if "out of memory" in str(e).lower() or isinstance(e, torch.OutOfMemoryError):
             print("[OOM] CUDA Out of Memory during GLB extraction. Purging cache...")

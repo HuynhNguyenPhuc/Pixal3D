@@ -317,46 +317,50 @@ def run_inference(
     from utilities.gpu import aggressive_gpu_cleanup, simplify_mesh, clean_mesh
     aggressive_gpu_cleanup()
 
-    mesh_vertices = mesh.vertices
-    mesh_faces = mesh.faces
+    try:
+        mesh_vertices = mesh.vertices
+        mesh_faces = mesh.faces
 
-    # Always run GPU-based clean to prevent CuMesh illegal memory access on degenerate meshes
-    mesh_vertices, mesh_faces = clean_mesh(mesh_vertices, mesh_faces)
+        # Always run GPU-based clean to prevent CuMesh illegal memory access on degenerate meshes
+        mesh_vertices, mesh_faces = clean_mesh(mesh_vertices, mesh_faces)
 
-    import config
-    if simplify_mesh is not None and mesh_faces.shape[0] >= config.SIMPLIFICATION_THRESHOLD_FACES:
-        print(f"[Inference] Proactive Safeguard: Mesh has >= {config.SIMPLIFICATION_THRESHOLD_FACES:,} faces ({mesh_faces.shape[0]:,} faces). Simplifying to {config.SIMPLIFICATION_TARGET_FACES:,} faces on GPU to prevent OOM...")
-        try:
-            mesh_vertices, mesh_faces = simplify_mesh(mesh_vertices, mesh_faces, config.SIMPLIFICATION_TARGET_FACES)
-            print(f"[Inference] Proactive GPU Simplification complete. New face count: {mesh_faces.shape[0]:,}")
-        except BaseException as e:
-            print(f"[Inference] Proactive GPU Simplification failed: {type(e).__name__} - {e}. Proceeding with original density.")
+        import config
+        if simplify_mesh is not None and mesh_faces.shape[0] >= config.SIMPLIFICATION_THRESHOLD_FACES:
+            print(f"[Inference] Proactive Safeguard: Mesh has >= {config.SIMPLIFICATION_THRESHOLD_FACES:,} faces ({mesh_faces.shape[0]:,} faces). Simplifying to {config.SIMPLIFICATION_TARGET_FACES:,} faces on GPU to prevent OOM...")
+            try:
+                mesh_vertices, mesh_faces = simplify_mesh(mesh_vertices, mesh_faces, config.SIMPLIFICATION_TARGET_FACES)
+                print(f"[Inference] Proactive GPU Simplification complete. New face count: {mesh_faces.shape[0]:,}")
+            except BaseException as e:
+                print(f"[Inference] Proactive GPU Simplification failed: {type(e).__name__} - {e}. Proceeding with original density.")
 
-    # Extract & Triangulate GLB
-    print(f"[Inference] Extracting GLB mesh (Grid resolution: {res})...")
-    disable_tqdm = os.environ.get("DISABLE_TQDM", "0") == "1"
-    
-    glb = o_voxel.postprocess.to_glb(
-        vertices=mesh_vertices, faces=mesh_faces, attr_volume=mesh.attrs,
-        coords=mesh.coords, attr_layout=pipeline.pbr_attr_layout,
-        grid_size=res, aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
-        decimation_target=decimation_target, texture_size=4096,
-        remesh=True, remesh_band=1, remesh_project=0, use_tqdm=not disable_tqdm,
-    )
+        # Extract & Triangulate GLB
+        print(f"[Inference] Extracting GLB mesh (Grid resolution: {res})...")
+        disable_tqdm = os.environ.get("DISABLE_TQDM", "0") == "1"
+        
+        glb = o_voxel.postprocess.to_glb(
+            vertices=mesh_vertices, faces=mesh_faces, attr_volume=mesh.attrs,
+            coords=mesh.coords, attr_layout=pipeline.pbr_attr_layout,
+            grid_size=res, aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+            decimation_target=decimation_target, texture_size=4096,
+            remesh=True, remesh_band=1, remesh_project=0, use_tqdm=not disable_tqdm,
+        )
 
-    # Apply 180 degrees frontal rotation around Y-axis
-    rot = np.array([
-        [ 1,  0,  0,  0],
-        [ 0,  0, -1,  0],
-        [ 0,  1,  0,  0],
-        [ 0,  0,  0,  1],
-    ], dtype=np.float64)
-    glb.apply_transform(rot)
+        # Apply 180 degrees frontal rotation around Y-axis
+        rot = np.array([
+            [ 1,  0,  0,  0],
+            [ 0,  0, -1,  0],
+            [ 0,  1,  0,  0],
+            [ 0,  0,  0,  1],
+        ], dtype=np.float64)
+        glb.apply_transform(rot)
 
-    # Save to final output
-    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-    glb.export(output_path, extension_webp=not no_webp)
-    print(f"[Done] Export complete! GLB saved to: {output_path}")
+        # Save to final output
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        glb.export(output_path, extension_webp=not no_webp)
+        print(f"[Done] Export complete! GLB saved to: {output_path}")
+
+    finally:
+        aggressive_gpu_cleanup()
 
 
 if __name__ == "__main__":

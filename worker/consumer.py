@@ -400,10 +400,9 @@ def task_consumer_daemon() -> None:
                 except Exception as exc:
                     logger.error(f"Failed to acknowledge and clean up stream entry for task {uid}: {exc}")
 
-                # Release the lock only after a successful ACK.
-                # It prevents other workers from picking up this task before we ACK it as completed/failed, which could cause duplicate processing.
-                if ack_successful:
-                    _release_exec_lock()
+                # Release the execution lock now that we are done processing this task attempt.
+                # Releasing it here allows subsequent retry/reclaim attempts to successfully acquire it.
+                _release_exec_lock()
 
                 # Explicit CUDA cleanup after each task to prevent VRAM fragmentation.
                 aggressive_gpu_cleanup()
