@@ -314,18 +314,23 @@ def run_inference(
 
     # Free heavy sparse latents that are no longer needed for triangulation to save massive GPU VRAM.
     del shape_slat, tex_slat
-    from utilities.gpu import aggressive_gpu_cleanup
+    from utilities.gpu import aggressive_gpu_cleanup, simplify_mesh, clean_mesh
     aggressive_gpu_cleanup()
 
-    # Clean vertices and faces to prevent cumesh illegal memory access from degenerate geometry
-    try:
-        from utilities.gpu import clean_mesh_vertices_faces
-        print(f"[Inference] Cleaning mesh vertices/faces (input: {mesh.vertices.shape[0]:,} vertices, {mesh.faces.shape[0]:,} faces)...")
-        mesh_vertices, mesh_faces = clean_mesh_vertices_faces(mesh.vertices, mesh.faces)
-        print(f"[Inference] Mesh cleaned (output: {mesh_vertices.shape[0]:,} vertices, {mesh_faces.shape[0]:,} faces)")
-    except Exception as e:
-        print(f"[Inference] Warning: Failed to clean mesh with clean_mesh_vertices_faces: {e}")
-        mesh_vertices, mesh_faces = mesh.vertices, mesh.faces
+    mesh_vertices = mesh.vertices
+    mesh_faces = mesh.faces
+
+    # Always run GPU-based clean to prevent CuMesh illegal memory access on degenerate meshes
+    mesh_vertices, mesh_faces = clean_mesh(mesh_vertices, mesh_faces)
+
+    import config
+    if simplify_mesh is not None and mesh_faces.shape[0] >= config.SIMPLIFICATION_THRESHOLD_FACES:
+        print(f"[Inference] Proactive Safeguard: Mesh has >= {config.SIMPLIFICATION_THRESHOLD_FACES:,} faces ({mesh_faces.shape[0]:,} faces). Simplifying to {config.SIMPLIFICATION_TARGET_FACES:,} faces on GPU to prevent OOM...")
+        try:
+            mesh_vertices, mesh_faces = simplify_mesh(mesh_vertices, mesh_faces, config.SIMPLIFICATION_TARGET_FACES)
+            print(f"[Inference] Proactive GPU Simplification complete. New face count: {mesh_faces.shape[0]:,}")
+        except BaseException as e:
+            print(f"[Inference] Proactive GPU Simplification failed: {type(e).__name__} - {e}. Proceeding with original density.")
 
     # Extract & Triangulate GLB
     print(f"[Inference] Extracting GLB mesh (Grid resolution: {res})...")

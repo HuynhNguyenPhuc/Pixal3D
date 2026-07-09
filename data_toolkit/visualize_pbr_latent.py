@@ -143,10 +143,10 @@ def main():
     try:
         import sys
         sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from utilities.gpu import clean_mesh_vertices_faces
-        mesh_vertices, mesh_faces = clean_mesh_vertices_faces(mesh_with_voxel.vertices, mesh_with_voxel.faces)
+        from utilities.gpu import clean_mesh
+        mesh_vertices, mesh_faces = clean_mesh(mesh_with_voxel.vertices, mesh_with_voxel.faces)
     except Exception as e:
-        print(f"Warning: Failed to clean mesh with clean_mesh_vertices_faces: {e}")
+        print(f"Warning: Failed to clean mesh with clean_mesh: {e}")
         mesh_vertices, mesh_faces = mesh_with_voxel.vertices, mesh_with_voxel.faces
 
     glb = o_voxel.postprocess.to_glb(

@@ -26,7 +26,7 @@ class GenerationRequest(BaseModel):
     decimation_target: int = Field(
         500000,
         description="Target face count for mesh decimation",
-        ge=100000,
+        ge=10000,
         le=1000000,
     )
     texture_size: int = Field(

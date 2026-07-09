@@ -10,6 +10,7 @@ tqdm==4.67.1
 easydict==1.13
 opencv-python-headless==4.12.0.88
 trimesh==4.10.1
+fast-simplification
 transformers==4.57.3
 zstandard==0.25.0
 kornia==0.8.2
