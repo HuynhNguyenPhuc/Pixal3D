@@ -105,6 +105,13 @@ def robust_to_glb(
         assert voxel_size.dim() == 1 and voxel_size.size(0) == 3
         assert isinstance(grid_size, torch.Tensor)
         assert grid_size.dim() == 1 and grid_size.size(0) == 3
+
+        # Force remesh to False if resolution is extremely high to prevent CUDA OOM inside CuMesh
+        if remesh and grid_size is not None:
+            max_res = int(grid_size.max().item())
+            if max_res > 512:
+                print(f"[Safeguard] Resolution {max_res} is too high for Dual Contouring remeshing. Forcing remesh=False to prevent GPU OOM.")
+                remesh = False
         
     except BaseException as norm_err:
         print(f"[Fatal] to_glb input validation failed: {norm_err}")
@@ -196,6 +203,40 @@ def robust_to_glb(
         print("Cleaning mesh...")
 
     try:
+        # --- BRANCH B: Remeshing Pipeline (Narrow-Band Dual Contouring) ---
+        if remesh:
+            try:
+                center = aabb.mean(dim=0)
+                scale = (aabb[1] - aabb[0]).max().item()
+                resolution = grid_size.max().item()
+                
+                # Reconstruct the 3D surface envelope using narrow-band Dual Contouring (Voxelization)
+                mesh.init(*cumesh.remeshing.remesh_narrow_band_dc(
+                    vertices, faces,
+                    center = center,
+                    scale = (resolution + 3 * remesh_band) / resolution * scale,
+                    resolution = resolution,
+                    band = remesh_band,
+                    project_back = remesh_project, 
+                    verbose = verbose,
+                    bvh = bvh,
+                ))
+                if verbose:
+                    print(f"After remeshing: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
+                
+                # Decimate the reconstructed remeshed surface down to target density
+                mesh.simplify(decimation_target, verbose=verbose)
+                
+                if verbose:
+                    print(f"After simplifying: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
+            except BaseException as remesh_err:
+                print(f"[Warning] Dual Contouring remeshing failed: {remesh_err}. Falling back to standard non-remeshed simplification Branch A.")
+                local_cleanup()
+                remesh = False
+                # Re-initialize mesh with the original welded vertices and faces
+                mesh = cumesh.CuMesh()
+                mesh.init(vertices, faces)
+
         # --- BRANCH A: Standard Simplification (No dual contouring remesh) ---
         if not remesh:
             # Clean duplicate triangles before collapsing edges
@@ -234,32 +275,6 @@ def robust_to_glb(
                 print(f"After final cleanup: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
                 
             mesh.unify_face_orientations()
-        
-        # --- BRANCH B: Remeshing Pipeline (Narrow-Band Dual Contouring) ---
-        else:
-            center = aabb.mean(dim=0)
-            scale = (aabb[1] - aabb[0]).max().item()
-            resolution = grid_size.max().item()
-            
-            # Reconstruct the 3D surface envelope using narrow-band Dual Contouring (Voxelization)
-            mesh.init(*cumesh.remeshing.remesh_narrow_band_dc(
-                vertices, faces,
-                center = center,
-                scale = (resolution + 3 * remesh_band) / resolution * scale,
-                resolution = resolution,
-                band = remesh_band,
-                project_back = remesh_project, 
-                verbose = verbose,
-                bvh = bvh,
-            ))
-            if verbose:
-                print(f"After remeshing: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
-            
-            # Decimate the reconstructed remeshed surface down to target density
-            mesh.simplify(decimation_target, verbose=verbose)
-            
-            if verbose:
-                print(f"After simplifying: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
                 
     except BaseException as topo_err:
         print(f"[Fatal] Topological processing or simplification failed: {topo_err}")
