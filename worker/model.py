@@ -12,6 +12,7 @@ from PIL import Image
 import torch
 import trimesh
 
+import utilities.postprocess # Ensure monkey-patch is registered first
 import o_voxel
 import numpy as np
 
@@ -180,22 +181,27 @@ class ModelWorker:
         del shape_slat, tex_slat, mesh_list
         aggressive_gpu_cleanup()
 
+        # Unload heavy models to CPU before we run triangulation, decimation, and baking, which require substantial contiguous VRAM
+        self.logger.info("Temporarily unloading pipeline and image-conditioning models to CPU...")
+        t_offload_start = time.time()
+        self.pipeline.cpu()
+        if hasattr(self.pipeline, 'image_cond_model_ss') and self.pipeline.image_cond_model_ss is not None:
+            self.pipeline.image_cond_model_ss.cpu()
+        if hasattr(self.pipeline, 'image_cond_model_shape_512') and self.pipeline.image_cond_model_shape_512 is not None:
+            self.pipeline.image_cond_model_shape_512.cpu()
+        if hasattr(self.pipeline, 'image_cond_model_shape_1024') and self.pipeline.image_cond_model_shape_1024 is not None:
+            self.pipeline.image_cond_model_shape_1024.cpu()
+        if hasattr(self.pipeline, 'image_cond_model_tex_1024') and self.pipeline.image_cond_model_tex_1024 is not None:
+            self.pipeline.image_cond_model_tex_1024.cpu()
+        aggressive_gpu_cleanup()
+        self.logger.info(f"Model offload to CPU completed in {time.time() - t_offload_start:.4f} seconds.")
+
         try:
             mesh_vertices = mesh.vertices
             mesh_faces = mesh.faces
 
-            if mesh_faces.shape[0] >= config.SIMPLIFICATION_THRESHOLD_FACES:
-                self.logger.info(f"Proactive Safeguard: Mesh has >= {config.SIMPLIFICATION_THRESHOLD_FACES:,} faces ({mesh_faces.shape[0]:,} faces). Simplifying to {config.SIMPLIFICATION_TARGET_FACES:,} faces on GPU to prevent OOM...")
-                try:
-                    # simplify_mesh already includes welding, simplification, and post-simplification cleaning passes.
-                    mesh_vertices, mesh_faces = simplify_mesh(mesh_vertices, mesh_faces, config.SIMPLIFICATION_TARGET_FACES)
-                    self.logger.info(f"Proactive GPU Simplification complete. New face count: {mesh_faces.shape[0]:,}")
-                except BaseException as e:
-                    self.logger.warning(f"Proactive GPU Simplification failed: {type(e).__name__} - {e}. Falling back to clean_mesh on original density.")
-                    mesh_vertices, mesh_faces = clean_mesh(mesh_vertices, mesh_faces)
-            else:
-                # Always run GPU-based clean to prevent CuMesh illegal memory access on degenerate meshes
-                mesh_vertices, mesh_faces = clean_mesh(mesh_vertices, mesh_faces)
+            # Always run GPU-based clean to prevent CuMesh illegal memory access on degenerate meshes
+            mesh_vertices, mesh_faces = clean_mesh(mesh_vertices, mesh_faces)
 
             try:
                 glb = o_voxel.postprocess.to_glb(
@@ -204,7 +210,7 @@ class ModelWorker:
                     grid_size=res, 
                     aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
                     decimation_target=decimation_target, texture_size=texture_size,
-                    remesh=True, remesh_band=1, remesh_project=0, use_tqdm=False,
+                    remesh=True, remesh_band=3, remesh_project=0, use_tqdm=False,
                 )
             except Exception as exc:
                 exc_str = str(exc).lower()
@@ -281,4 +287,16 @@ class ModelWorker:
             return output_path
 
         finally:
+            self.logger.info("Reloading pipeline and image-conditioning models to GPU...")
+            t_reload_start = time.time()
+            self.pipeline.cuda()
+            if hasattr(self.pipeline, 'image_cond_model_ss') and self.pipeline.image_cond_model_ss is not None:
+                self.pipeline.image_cond_model_ss.cuda()
+            if hasattr(self.pipeline, 'image_cond_model_shape_512') and self.pipeline.image_cond_model_shape_512 is not None:
+                self.pipeline.image_cond_model_shape_512.cuda()
+            if hasattr(self.pipeline, 'image_cond_model_shape_1024') and self.pipeline.image_cond_model_shape_1024 is not None:
+                self.pipeline.image_cond_model_shape_1024.cuda()
+            if hasattr(self.pipeline, 'image_cond_model_tex_1024') and self.pipeline.image_cond_model_tex_1024 is not None:
+                self.pipeline.image_cond_model_tex_1024.cuda()
             aggressive_gpu_cleanup()
+            self.logger.info(f"Model reload to GPU completed in {time.time() - t_reload_start:.4f} seconds.")

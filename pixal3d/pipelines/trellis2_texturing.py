@@ -340,10 +340,12 @@ class Trellis2TexturingPipeline(Pipeline):
         
         # extend
         mask = (~mask).astype(np.uint8)
-        base_color = cv2.inpaint(base_color, mask, 3, cv2.INPAINT_TELEA)
-        metallic = cv2.inpaint(metallic, mask, 1, cv2.INPAINT_TELEA)[..., None]
-        roughness = cv2.inpaint(roughness, mask, 1, cv2.INPAINT_TELEA)[..., None]
-        alpha = cv2.inpaint(alpha, mask, 1, cv2.INPAINT_TELEA)[..., None]
+        base_radius = max(3, int(3 * (texture_size / 1024)))
+        pbr_radius = max(1, int(1 * (texture_size / 1024)))
+        base_color = cv2.inpaint(base_color, mask, base_radius, cv2.INPAINT_TELEA)
+        metallic = cv2.inpaint(metallic, mask, pbr_radius, cv2.INPAINT_TELEA)[..., None]
+        roughness = cv2.inpaint(roughness, mask, pbr_radius, cv2.INPAINT_TELEA)[..., None]
+        alpha = cv2.inpaint(alpha, mask, pbr_radius, cv2.INPAINT_TELEA)[..., None]
         
         material = trimesh.visual.material.PBRMaterial(
             baseColorTexture=Image.fromarray(np.concatenate([base_color, alpha], axis=-1)),

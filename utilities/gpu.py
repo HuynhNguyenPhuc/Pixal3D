@@ -87,11 +87,7 @@ def clean_mesh(vertices: torch.Tensor, faces: torch.Tensor) -> tuple[torch.Tenso
         if faces.shape[0] < 5000000:
             cu_mesh.remove_small_connected_components(1e-5)
             # Safely handle potential CUDA invalid configuration launches on meshes with zero holes/loops to fill
-            try:
-                cu_mesh.fill_holes(float(3e-2))
-            except RuntimeError as e:
-                if "invalid configuration argument" not in str(e):
-                    raise e
+            utilities.postprocess.robust_fill_holes(cu_mesh, float(1e-1))
         
         out_verts, out_faces = cu_mesh.read()
         
@@ -130,7 +126,7 @@ def simplify_mesh(vertices: torch.Tensor, faces: torch.Tensor, target_faces: int
         target_faces (int): The target density (face count) to decimate to.
         
     Returns:
-        tuple[torch.Tensor, torch.Tensor]: The simplified and cleaned mesh mesh vertices 
+        tuple[torch.Tensor, torch.Tensor]: The simplified and cleaned mesh vertices 
             and faces tensors, on their original device.
     """
     if vertices.shape[0] == 0 or faces.shape[0] == 0:
@@ -144,8 +140,6 @@ def simplify_mesh(vertices: torch.Tensor, faces: torch.Tensor, target_faces: int
         device = vertices.device
         
         # Super fast GPU-based vertex welding using PyTorch unique logic.
-        # This merges duplicate and unwelded vertices, connecting independent 
-        # triangles into a manifold mesh before any cleaning or simplification.
         unique_verts, inverse_indices = torch.unique(vertices, dim=0, return_inverse=True)
         faces_welded = inverse_indices[faces.long()].int()
         
@@ -157,7 +151,7 @@ def simplify_mesh(vertices: torch.Tensor, faces: torch.Tensor, target_faces: int
         cu_mesh = cumesh.CuMesh()
         cu_mesh.init(gpu_verts, gpu_faces)
         
-        # Minimize input cleanup to speed up massive decimation pipelines (mesh is already clean_mesh)
+        # Minimize input cleanup to speed up massive decimation pipelines
         cu_mesh.remove_duplicate_faces()
         cu_mesh.repair_non_manifold_edges()
         
@@ -168,12 +162,9 @@ def simplify_mesh(vertices: torch.Tensor, faces: torch.Tensor, target_faces: int
         cu_mesh.remove_duplicate_faces()
         cu_mesh.repair_non_manifold_edges()
         cu_mesh.remove_small_connected_components(1e-5)
-        # Safely handle potential CUDA invalid configuration launches on meshes with zero holes/loops to fill
-        try:
-            cu_mesh.fill_holes(float(3e-2))
-        except RuntimeError as e:
-            if "invalid configuration argument" not in str(e):
-                raise e
+        
+        # Safely fill holes using robust boundary validation sweep to avoid invalid grid configurations
+        utilities.postprocess.robust_fill_holes(cu_mesh, float(1e-1))
         
         out_verts, out_faces = cu_mesh.read()
         

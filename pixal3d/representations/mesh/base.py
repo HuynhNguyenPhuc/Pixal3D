@@ -32,7 +32,7 @@ class Mesh:
     def cpu(self):
         return self.to('cpu')
     
-    def fill_holes(self, max_hole_perimeter=3e-2):
+    def fill_holes(self, max_hole_perimeter=1e-1):
         # Empty cache before heavy CuMesh operations to prevent CUDA out of memory errors
         torch.cuda.empty_cache()
         vertices = self.vertices.clone().cuda().contiguous()

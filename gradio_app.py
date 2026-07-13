@@ -83,6 +83,7 @@ class CacheStaticFiles(StaticFiles):
         return response
 
 from pixal3d.modules.sparse import SparseTensor
+import utilities.postprocess # Ensure monkey-patch is registered first
 from pixal3d.pipelines import Pixal3DImageTo3DPipeline
 from pixal3d.renderers import EnvMap
 from pixal3d.utils import render_utils
@@ -919,21 +920,13 @@ def extract_glb_api(state_path: str, decimation_target: int, texture_size: int, 
             # Always run GPU-based clean to prevent CuMesh illegal memory access on degenerate meshes
             mesh_vertices, mesh_faces = clean_mesh(mesh_vertices, mesh_faces)
 
-            if mesh_faces.shape[0] >= config.SIMPLIFICATION_THRESHOLD_FACES:
-                print(f"Proactive Safeguard: Mesh has >= {config.SIMPLIFICATION_THRESHOLD_FACES:,} faces ({mesh_faces.shape[0]:,} faces). Simplifying to {config.SIMPLIFICATION_TARGET_FACES:,} faces on GPU to prevent OOM...")
-                try:
-                    mesh_vertices, mesh_faces = simplify_mesh(mesh_vertices, mesh_faces, config.SIMPLIFICATION_TARGET_FACES)
-                    print(f"Proactive GPU Simplification complete. New face count: {mesh_faces.shape[0]:,}")
-                except BaseException as e:
-                    print(f"Proactive GPU Simplification failed: {type(e).__name__} - {e}. Proceeding with original density.")
-
             try:
                 glb = o_voxel.postprocess.to_glb(
                     vertices=mesh_vertices, faces=mesh_faces, attr_volume=mesh.attrs,
                     coords=mesh.coords, attr_layout=pipeline.pbr_attr_layout,
                     grid_size=res, aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
                     decimation_target=decimation_target, texture_size=texture_size,
-                    remesh=True, remesh_band=1, remesh_project=0, use_tqdm=True,
+                    remesh=True, remesh_band=3, remesh_project=0, use_tqdm=True,
                 )
             except Exception as exc:
                 exc_str = str(exc).lower()

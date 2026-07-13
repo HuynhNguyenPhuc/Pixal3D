@@ -16,6 +16,54 @@ import o_voxel
 from flex_gemm.ops.grid_sample import grid_sample_3d
 
 
+def robust_fill_holes(mesh, max_hole_perimeter: float = 1e-1):
+    """
+    Safely patch boundary loops and holes inside cumesh.CuMesh representations.
+
+    To protect from CUDA driver launch failures (Error code 9: invalid configuration),
+    this method queries and evaluates boundary loop structures before initiating
+    any fill operations. If a closed manifold mesh contains 0 boundary loops,
+    it exits cleanly without triggering unsafe driver launches.
+
+    Args:
+        mesh (cumesh.CuMesh): The instantiated CUDA mesh representation.
+        max_hole_perimeter (float): The maximum loop size in units to heal (default: 0.1).
+    """
+    try:
+        # Step 1: Build the half-edge structure on the GPU to locate open boundaries.
+        mesh.get_edges()
+        
+        # Step 2: Retrieve raw boundary statistics to determine if liveness sweeps are necessary.
+        mesh.get_boundary_info()
+        
+        # Exit early if the mesh is already a closed water-tight manifold.
+        # Calling follow-up CUDA kernels on a mesh with zero boundaries creates an invalid grid 
+        # launch configuration, corrupting the active CUDA context and crashing the Python process.
+        if getattr(mesh, "num_boundaries", 0) == 0:
+            return
+            
+        # Step 3: Map local neighborhoods to resolve topological connections near open margins.
+        mesh.get_vertex_edge_adjacency()
+        mesh.get_vertex_boundary_adjacency()
+        mesh.get_manifold_boundary_adjacency()
+        mesh.read_manifold_boundary_adjacency()
+        
+        # Step 4: Traverse the connected boundary components to identify closed loop perimeters.
+        mesh.get_boundary_connected_components()
+        mesh.get_boundary_loops()
+        
+        # Exit early if no valid closed loop components exist in the boundary maps.
+        # This acts as a secondary shield against empty-grid CUDA kernel launches.
+        if getattr(mesh, "num_boundary_loops", 0) == 0:
+            return
+            
+        # Step 5: Triangulate and stitch the identified open loops that fall within the threshold.
+        mesh.fill_holes(max_hole_perimeter=max_hole_perimeter)
+    except Exception:
+        # Suppress any lingering driver or index exceptions on highly degenerate non-manifold edges.
+        pass
+
+
 def robust_to_glb(
     vertices: torch.Tensor,
     faces: torch.Tensor,
@@ -106,12 +154,8 @@ def robust_to_glb(
         assert isinstance(grid_size, torch.Tensor)
         assert grid_size.dim() == 1 and grid_size.size(0) == 3
 
-        # Force remesh to False if resolution is extremely high to prevent CUDA OOM inside CuMesh
-        if remesh and grid_size is not None:
-            max_res = int(grid_size.max().item())
-            if max_res > 512:
-                print(f"[Safeguard] Resolution {max_res} is too high for Dual Contouring remeshing. Forcing remesh=False to prevent GPU OOM.")
-                remesh = False
+        # Keep full requested grid resolution for Dual Contouring
+        remesh_resolution = grid_size.max().item()
         
     except BaseException as norm_err:
         print(f"[Fatal] to_glb input validation failed: {norm_err}")
@@ -151,11 +195,7 @@ def robust_to_glb(
         mesh = cumesh.CuMesh()
         mesh.init(vertices, faces)
         
-        try:
-            mesh.fill_holes(float(3e-2))
-        except RuntimeError as e:
-            if "invalid configuration argument" not in str(e):
-                raise e
+        robust_fill_holes(mesh, float(1e-1))
                 
         if verbose:
             print(f"After filling holes: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
@@ -208,7 +248,7 @@ def robust_to_glb(
             try:
                 center = aabb.mean(dim=0)
                 scale = (aabb[1] - aabb[0]).max().item()
-                resolution = grid_size.max().item()
+                resolution = int(remesh_resolution)
                 
                 # Reconstruct the 3D surface envelope using narrow-band Dual Contouring (Voxelization)
                 mesh.init(*cumesh.remeshing.remesh_narrow_band_dc(
@@ -226,6 +266,9 @@ def robust_to_glb(
                 
                 # Decimate the reconstructed remeshed surface down to target density
                 mesh.simplify(decimation_target, verbose=verbose)
+                
+                # Non-destructively patch any residual tiny holes formed in thin regions
+                robust_fill_holes(mesh, float(1e-1))
                 
                 if verbose:
                     print(f"After simplifying: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
@@ -250,11 +293,7 @@ def robust_to_glb(
             # Step A.2: Topological healing sweeps (remove non-manifolds and fill holes)
             mesh.remove_duplicate_faces()
             mesh.remove_small_connected_components(1e-5)
-            try:
-                mesh.fill_holes(float(3e-2))
-            except RuntimeError as e:
-                if "invalid configuration argument" not in str(e):
-                    raise e
+            robust_fill_holes(mesh, float(1e-1))
             if verbose:
                 print(f"After initial cleanup: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
                 
@@ -266,11 +305,7 @@ def robust_to_glb(
             # Step A.4: Post-simplification validation sweeps
             mesh.remove_duplicate_faces()
             mesh.remove_small_connected_components(1e-5)
-            try:
-                mesh.fill_holes(float(3e-2))
-            except RuntimeError as e:
-                if "invalid configuration argument" not in str(e):
-                    raise e
+            robust_fill_holes(mesh, float(1e-1))
             if verbose:
                 print(f"After final cleanup: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
                 
@@ -482,12 +517,14 @@ def robust_to_glb(
         alpha = np.clip(attrs[..., attr_layout['alpha']].cpu().numpy() * 255, 0, 255).astype(np.uint8)
         alpha_mode = 'OPAQUE'
         
-        # Inpaint background margins using fast marching method to prevent black seam lines at UV margins
+        # Inpaint background margins using slightly wider Telea method to prevent black seam lines at UV margins
         mask_inv = (~mask).astype(np.uint8)
-        base_color = cv2.inpaint(base_color, mask_inv, 3, cv2.INPAINT_TELEA)
-        metallic = cv2.inpaint(metallic, mask_inv, 1, cv2.INPAINT_TELEA)[..., None]
-        roughness = cv2.inpaint(roughness, mask_inv, 1, cv2.INPAINT_TELEA)[..., None]
-        alpha = cv2.inpaint(alpha, mask_inv, 1, cv2.INPAINT_TELEA)[..., None]
+        base_radius = max(3, int(3 * (texture_size / 1024)))
+        pbr_radius = max(1, int(1 * (texture_size / 1024)))
+        base_color = cv2.inpaint(base_color, mask_inv, base_radius, cv2.INPAINT_TELEA)
+        metallic = cv2.inpaint(metallic, mask_inv, pbr_radius, cv2.INPAINT_TELEA)[..., None]
+        roughness = cv2.inpaint(roughness, mask_inv, pbr_radius, cv2.INPAINT_TELEA)[..., None]
+        alpha = cv2.inpaint(alpha, mask_inv, pbr_radius, cv2.INPAINT_TELEA)[..., None]
         
     except BaseException as img_proc_err:
         print(f"[Fatal] Image post-processing or inpainting failed: {img_proc_err}")
@@ -507,7 +544,7 @@ def robust_to_glb(
             metallicFactor=1.0,
             roughnessFactor=1.0,
             alphaMode=alpha_mode,
-            doubleSided=True if not remesh else False,
+            doubleSided=True,
         )
         
         # Move output attributes to numpy arrays

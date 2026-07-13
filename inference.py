@@ -40,6 +40,7 @@ def configure_autotune_cache():
 
 configure_autotune_cache()
 
+import utilities.postprocess # Ensure monkey-patch is registered first
 from pixal3d.pipelines import Pixal3DImageTo3DPipeline
 import o_voxel
 
@@ -227,6 +228,7 @@ def run_inference(
     no_webp: bool = True,
     decimation_target: int = 200000,
 ):
+    t_start = time.time()
     # Dynamic VRAM Check & Mode Auto-switching
     if not low_vram and torch.cuda.is_available():
         try:
@@ -246,7 +248,9 @@ def run_inference(
     image_preprocessed = pipeline.preprocess_image(img)
 
     # Save a temporary preprocessed copy for the camera estimation model
-    tmp_path = os.path.join(os.path.dirname(os.path.abspath(output_path)), f"_tmp_preprocessed_{int(time.time()*1000)}.png")
+    out_dir = os.path.dirname(os.path.abspath(output_path))
+    os.makedirs(out_dir, exist_ok=True)
+    tmp_path = os.path.join(out_dir, f"_tmp_preprocessed_{int(time.time()*1000)}.png")
     image_preprocessed.save(tmp_path)
 
     # Camera Calibration
@@ -314,8 +318,23 @@ def run_inference(
 
     # Free heavy sparse latents that are no longer needed for triangulation to save massive GPU VRAM.
     del shape_slat, tex_slat
-    from utilities.gpu import aggressive_gpu_cleanup, simplify_mesh, clean_mesh
+    from utilities.gpu import aggressive_gpu_cleanup, clean_mesh
     aggressive_gpu_cleanup()
+
+    # Unload heavy models to CPU before we run triangulation, decimation, and baking, which require substantial contiguous VRAM
+    print("[Inference] Temporarily unloading pipeline and image-conditioning models to CPU...")
+    t_offload_start = time.time()
+    pipeline.cpu()
+    if hasattr(pipeline, 'image_cond_model_ss') and pipeline.image_cond_model_ss is not None:
+        pipeline.image_cond_model_ss.cpu()
+    if hasattr(pipeline, 'image_cond_model_shape_512') and pipeline.image_cond_model_shape_512 is not None:
+        pipeline.image_cond_model_shape_512.cpu()
+    if hasattr(pipeline, 'image_cond_model_shape_1024') and pipeline.image_cond_model_shape_1024 is not None:
+        pipeline.image_cond_model_shape_1024.cpu()
+    if hasattr(pipeline, 'image_cond_model_tex_1024') and pipeline.image_cond_model_tex_1024 is not None:
+        pipeline.image_cond_model_tex_1024.cpu()
+    aggressive_gpu_cleanup()
+    print(f"[Inference] Model offload to CPU completed in {time.time() - t_offload_start:.4f} seconds.")
 
     try:
         mesh_vertices = mesh.vertices
@@ -323,15 +342,6 @@ def run_inference(
 
         # Always run GPU-based clean to prevent CuMesh illegal memory access on degenerate meshes
         mesh_vertices, mesh_faces = clean_mesh(mesh_vertices, mesh_faces)
-
-        import config
-        if simplify_mesh is not None and mesh_faces.shape[0] >= config.SIMPLIFICATION_THRESHOLD_FACES:
-            print(f"[Inference] Proactive Safeguard: Mesh has >= {config.SIMPLIFICATION_THRESHOLD_FACES:,} faces ({mesh_faces.shape[0]:,} faces). Simplifying to {config.SIMPLIFICATION_TARGET_FACES:,} faces on GPU to prevent OOM...")
-            try:
-                mesh_vertices, mesh_faces = simplify_mesh(mesh_vertices, mesh_faces, config.SIMPLIFICATION_TARGET_FACES)
-                print(f"[Inference] Proactive GPU Simplification complete. New face count: {mesh_faces.shape[0]:,}")
-            except BaseException as e:
-                print(f"[Inference] Proactive GPU Simplification failed: {type(e).__name__} - {e}. Proceeding with original density.")
 
         # Extract & Triangulate GLB
         print(f"[Inference] Extracting GLB mesh (Grid resolution: {res})...")
@@ -342,7 +352,7 @@ def run_inference(
             coords=mesh.coords, attr_layout=pipeline.pbr_attr_layout,
             grid_size=res, aabb=[[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
             decimation_target=decimation_target, texture_size=4096,
-            remesh=True, remesh_band=1, remesh_project=0, use_tqdm=not disable_tqdm,
+            remesh=True, remesh_band=3, remesh_project=0, use_tqdm=not disable_tqdm,
         )
 
         # Apply 180 degrees frontal rotation around Y-axis
@@ -358,6 +368,7 @@ def run_inference(
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
         glb.export(output_path, extension_webp=not no_webp)
         print(f"[Done] Export complete! GLB saved to: {output_path}")
+        print(f"[Timing] Total Generation Time: {time.time() - t_start:.2f} seconds")
 
     finally:
         aggressive_gpu_cleanup()
@@ -382,8 +393,16 @@ if __name__ == "__main__":
                         help="Disable WebP texture compression in exported GLB (uses standard PNG instead).")
     parser.add_argument("--decimation_target", type=int, default=200000,
                         help="Target number of faces for mesh decimation. Default is 200,000.")
+    parser.add_argument("--steps", type=int, default=None)
+    parser.add_argument("--ss_steps", type=int, default=12)
+    parser.add_argument("--shape_steps", type=int, default=12)
+    parser.add_argument("--tex_steps", type=int, default=12)
 
     args = parser.parse_args()
+
+    ss_steps = args.steps if args.steps is not None else args.ss_steps
+    shape_steps = args.steps if args.steps is not None else args.shape_steps
+    tex_steps = args.steps if args.steps is not None else args.tex_steps
 
     run_inference(
         image_path=args.image,
@@ -395,4 +414,7 @@ if __name__ == "__main__":
         resolution=args.resolution,
         no_webp=args.no_webp,
         decimation_target=args.decimation_target,
+        ss_sampling_steps=ss_steps,
+        shape_slat_sampling_steps=shape_steps,
+        tex_slat_sampling_steps=tex_steps,
     )
