@@ -107,6 +107,25 @@ async def handle_send(request: GenerationRequest) -> JSONResponse:
                 },
             )
 
+        # Check if the task is already active (queued, running, or uploading) to prevent duplicate stream entries
+        existing_status = get_status_from_redis(uid)
+        if existing_status:
+            status_str = existing_status.get("status")
+            if status_str in {"queued", "running", "uploading"}:
+                logger.info(f"Task {uid} is already active with status '{status_str}'. Returning existing status instead of queueing duplicate.")
+                
+                # Check if it has a queue position
+                q_pos = get_queue_position(uid) if status_str == "queued" else None
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": status_str,
+                        "hash": uid,
+                        "queue_position": q_pos,
+                        "message": "Task is already active in queue or running.",
+                    },
+                )
+
         # Reject when the stream backlog is already at capacity.
         queue_depth = get_queue_depth()
 
