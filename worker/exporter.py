@@ -1,13 +1,7 @@
-"""Isolated GLB mesh export module using multiprocessing.
-
-Runs cumesh/o_voxel GLB postprocessing inside a dedicated spawned child process.
-If cumesh or nvdiffrast triggers a low-level C++/CUDA error (illegal memory access,
-segfault, device-side assert), ONLY the isolated child process terminates.
-The main worker process retains its loaded ML models in VRAM without needing a
-time-consuming ~3.5-minute restart.
-"""
+"""Isolated GLB mesh export module using multiprocessing."""
 
 import multiprocessing as mp
+import queue
 import numpy as np
 import torch
 
@@ -274,28 +268,41 @@ def export_glb_isolated(
     p.start()
     logger.info(f"Child export process started with PID: {p.pid}")
 
-    p.join(timeout=timeout_seconds)
-
-    # --- Handle Timeout --- #
-    if p.is_alive():
+    # --- Wait for a Result, Draining the Queue as We Go --- #
+    # Must call Queue.get() (with the overall timeout) *before* Process.join().
+    # The child's result_queue.put(...) payload (a GLB with large textures) can
+    # exceed the OS pipe buffer, in which case the child blocks inside put()
+    # until the parent reads from the queue. Joining the process first (waiting
+    # for it to exit) before ever draining the queue deadlocks: the child can't
+    # exit until put() completes, and put() can't complete until something reads.
+    try:
+        res_tuple = result_queue.get(timeout=timeout_seconds)
+    except queue.Empty:
         logger.error(f"Isolated export child process (PID {p.pid}) timed out after {timeout_seconds}s. Terminating process.")
+        if p.is_alive():
+            p.terminate()
+            p.join(timeout=5)
+            if p.is_alive():
+                p.kill()
+                p.join(timeout=5)
+        raise TimeoutError(f"GLB export process timed out after {timeout_seconds}s.")
+
+    # --- Reap the Process Now That the Result Has Been Read --- #
+    # The child should exit promptly once its put() unblocks; give it a short
+    # grace period rather than the full export timeout again.
+    p.join(timeout=30)
+    if p.is_alive():
+        logger.warning(f"Isolated export child process (PID {p.pid}) did not exit after returning a result. Terminating.")
         p.terminate()
         p.join(timeout=5)
-        raise TimeoutError(f"GLB export process timed out after {timeout_seconds}s.")
 
     # --- Handle Abnormal Process Exit --- #
     exit_code = p.exitcode
-    if exit_code != 0:
+    if exit_code not in (0, None):
         logger.error(f"Isolated export child process (PID {p.pid}) crashed with exit code {exit_code}.")
         raise RuntimeError(f"GLB export process crashed with exit code {exit_code} (likely low-level CUDA/CuMesh error).")
 
-    # --- Handle Empty Output Queue --- #
-    if result_queue.empty():
-        logger.error(f"Child export process (PID {p.pid}) exited with code 0 but returned no result.")
-        raise RuntimeError("GLB export child process exited without returning a result.")
-
     # --- Parse Result Payload --- #
-    res_tuple = result_queue.get()
     status = res_tuple[0]
 
     if status == "SUCCESS":
