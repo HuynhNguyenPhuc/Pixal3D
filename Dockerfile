@@ -72,8 +72,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy pre-built requirements first to optimize Docker layer caching
 COPY requirements-hfdemo.txt /app/
 
-# Install Python packages using pre-built binary wheels (including o_voxel, cumesh, etc.)
+# Install Python packages using pre-built binary wheels (including o_voxel, etc.)
 RUN pip install --no-cache-dir -r requirements-hfdemo.txt
+
+# Build and install CuMesh from source at a pinned, newer commit instead of a prebuilt wheel
+ARG CUMESH_COMMIT="12289e1062f0603f2f0d0771b02e1395d247f26f"
+RUN git clone --recursive https://github.com/JeffreyXiang/CuMesh.git /tmp/CuMesh \
+    && git -C /tmp/CuMesh checkout "${CUMESH_COMMIT}" \
+    && git -C /tmp/CuMesh submodule update --init --recursive \
+    && pip install --no-cache-dir /tmp/CuMesh --no-build-isolation \
+    && rm -rf /tmp/CuMesh
 
 # Build and install natten from source targeting multiple CUDA architectures
 ARG NATTEN_CUDA_ARCH="8.0"
