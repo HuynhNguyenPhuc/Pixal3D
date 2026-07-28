@@ -33,6 +33,29 @@ def is_cuda_out_of_memory(exc: BaseException) -> bool:
     )
 
 
+def is_cuda_context_corrupted(exc: BaseException) -> bool:
+    """
+    True for CUDA/CuMesh failures that poison the process's CUDA context
+    (illegal memory access, device-side assert).
+
+    Unlike OOM, cleanup-and-retry *on the same process* cannot recover from
+    these -- the worker subprocess is flagged for restart (see
+    worker/execution.py, app_state.cuda_context_poisoned). But retrying the
+    *task* on a fresh worker (new CUDA context, and generation is stochastic
+    so a retried mesh often isn't degenerate the same way) has been observed
+    to succeed in production. So this is still retriable, just for a
+    different reason than OOM.
+
+    Args:
+        exc (BaseException): The failure raised during a CUDA/CuMesh operation.
+
+    Returns:
+        bool: True if this is a context-corrupting CUDA/CuMesh error.
+    """
+    normalized = str(exc).lower()
+    return "illegal memory access" in normalized or "device-side assert" in normalized
+
+
 def classify_task_error(exc: Exception, params: dict | None = None) -> dict:
     """
     Classify execution failures into retry-friendly API error payloads.
@@ -52,6 +75,14 @@ def classify_task_error(exc: Exception, params: dict | None = None) -> dict:
         return {
             "message": message,
             "error_code": "CUDA_OOM",
+            "error_type": "resource_exhausted",
+            "retriable": True,
+        }
+
+    if is_cuda_context_corrupted(exc):
+        return {
+            "message": message,
+            "error_code": "CUDA_CONTEXT_CORRUPTED",
             "error_type": "resource_exhausted",
             "retriable": True,
         }

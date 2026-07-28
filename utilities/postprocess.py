@@ -33,11 +33,6 @@ def robust_fill_holes(mesh, max_hole_perimeter: float = 1e-1):
     """
     Safely patch boundary loops and holes inside cumesh.CuMesh representations.
 
-    To protect from CUDA driver launch failures (Error code 9: invalid configuration),
-    this method queries and evaluates boundary loop structures before initiating
-    any fill operations. If a closed manifold mesh contains 0 boundary loops,
-    it exits cleanly without triggering unsafe driver launches.
-
     Args:
         mesh (cumesh.CuMesh): The instantiated CUDA mesh representation.
         max_hole_perimeter (float): The maximum loop size in units to heal (default: 0.1).

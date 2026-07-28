@@ -97,7 +97,7 @@ def export_glb(
         logger.warning(f"OOM during primary GLB export: {exc}. Retrying without remesh...")
         aggressive_gpu_cleanup()
 
-    # --- Step 3: Fallback Attempt 1 (remesh=False) --- #
+    # --- Step 3: Fallback to remesh=False --- #
     try:
         mesh_result = robust_to_glb(
             vertices=vertices,

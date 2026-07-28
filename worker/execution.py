@@ -18,7 +18,7 @@ from broker.state import (
     set_status_in_redis,
 )
 from utilities.cleanup import cleanup_task_files
-from utilities.error_handling import classify_task_error, is_cuda_out_of_memory
+from utilities.error_handling import classify_task_error, is_cuda_context_corrupted
 from utilities.gcloud import convert_to_gcs_url, upload_blob
 from utilities.gpu import aggressive_gpu_cleanup
 from utilities.logger import get_logger
@@ -255,10 +255,12 @@ def run_worker(
         # Print the full traceback for debugging purposes.
         traceback.print_exc()
 
-        exc_str = error_msg.lower()
-        is_cuda_related = "cuda error" in exc_str or "cumesh" in exc_str or "illegal memory access" in exc_str or "device-side assert" in exc_str
-        if is_cuda_related and not is_cuda_out_of_memory(exc):
-            logger.critical(f"Fatal CUDA/CuMesh error: {error_msg}. Flagging worker subprocess restart.")
+        context_corrupted = is_cuda_context_corrupted(exc)
+        if context_corrupted:
+            logger.critical(
+                f"Fatal CUDA/CuMesh error: {error_msg}. Flagging worker subprocess restart. "
+                f"Task is retriable -- a fresh worker (new CUDA context) can retry it safely."
+            )
             app_state.needs_subprocess_restart = True
             # The CUDA context is corrupted from here on -- set this before any further
             # cleanup call (including the finally block below, and any already queued up
@@ -266,6 +268,10 @@ def run_worker(
             app_state.cuda_context_poisoned = True
 
         # Classify the error to determine whether it is retriable or resource-related.
+        # (context-corrupted CUDA errors are classified as retriable here -- retrying
+        # the same task on the fresh worker this restart produces has been observed to
+        # succeed, since generation is stochastic and a re-rolled mesh often isn't
+        # degenerate the same way.)
         classified = classify_task_error(exc, params)
 
         # Define the error response for general failures.
@@ -289,10 +295,13 @@ def run_worker(
             force=True
         )
 
-        # For CUDA OOM failures, do an immediate extra cleanup and track consecutive failures.  
+        # For CUDA OOM failures, do an immediate extra cleanup and track consecutive failures.
         # A single OOM may be transient and recoverable via cleanup and retry.
         # We only flag a subprocess restart after N OOMs in a row.
-        if classified.get("error_type") == "resource_exhausted":
+        # Context-corrupted errors are excluded here -- they already unconditionally
+        # flagged a restart above, and this counter/threshold is specifically for
+        # genuine OOM (which cleanup-and-retry on the *same* process can resolve).
+        if classified.get("error_type") == "resource_exhausted" and not context_corrupted:
             # Perform aggressive GPU cleanup to free up memory.
             aggressive_gpu_cleanup()
 
