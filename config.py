@@ -50,6 +50,17 @@ SHUTDOWN_GRACE_PERIOD = int(os.getenv("SHUTDOWN_GRACE_PERIOD", "90"))
 # exporter exists to avoid.
 EXPORT_TIMEOUT_SECONDS = int(os.getenv("EXPORT_TIMEOUT_SECONDS", "300"))
 
+# Caps OpenMP/MKL/OpenBLAS/OpenCV thread pools inside the GPU worker subprocess
+# (and the export child it spawns) to the pod's actual cgroup CPU quota. GKE
+# nodes expose their full physical core count via sched_getaffinity/nproc even
+# though the pod's `resources.limits.cpu` caps it far lower; libraries that size
+# thread pools off the visible core count then oversubscribe the CFS quota,
+# which throttles the *entire* container -- including the main process's
+# /health handler -- for the rest of the accounting period. Default matches the
+# StatefulSet's requests.cpu (see k8s/pixal3d-deployment.yaml), leaving the
+# limits.cpu headroom for the main API process.
+WORKER_CPU_THREAD_LIMIT = int(os.getenv("WORKER_CPU_THREAD_LIMIT", "6"))
+
 
 # ── Watchdog / process supervision ───────────────────────────────────────────
 WORKER_WATCHDOG_INTERVAL_SECONDS = int(os.getenv("WORKER_WATCHDOG_INTERVAL_SECONDS", "5"))

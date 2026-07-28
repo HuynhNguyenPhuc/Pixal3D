@@ -198,14 +198,14 @@ def is_terminal_status(status_data: Optional[dict]) -> bool:
     if not status_data:
         return False
 
-    status = status_data.get("status")
-    
-    # If it's an error but marked as retriable, it's not terminal from the queue's perspective.
+    # If marked as retriable, it's not terminal from the queue's perspective.
     # We want it to be retried (via PEL/XAUTOCLAIM) rather than ACKed and discarded.
-    if status == "error" and status_data.get("retriable") is True:
+    if status_data.get("retriable") is True:
         return False
-        
-    # Consider "completed", "error" (non-retriable), "cancelled", "interrupted", and "failed" as terminal states.
+
+    status = status_data.get("status")
+
+    # Consider "completed", "error" (non-retriable), "cancelled", "interrupted" (non-retriable), and "failed" as terminal states.
     return status in {"completed", "error", "cancelled", "interrupted", "failed"}
 
 

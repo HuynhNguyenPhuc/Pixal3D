@@ -1,5 +1,6 @@
 import gc
 import math
+import os
 from typing import Dict, Union, List
 
 import cv2
@@ -14,6 +15,18 @@ import cumesh
 import nvdiffrast.torch as dr
 import o_voxel
 from flex_gemm.ops.grid_sample import grid_sample_3d
+
+# OpenCV's thread pool (used by cv2.inpaint below) doesn't reliably follow
+# OMP_NUM_THREADS, so cap it explicitly to match whenever something upstream
+# (the k8s worker subprocess, see worker/process.py) has set that budget to
+# avoid CFS quota throttling. Only act if it's actually set -- this module is
+# also imported by standalone inference.py/gradio_app.py, which set no such
+# limit and should keep OpenCV's normal thread count.
+if "OMP_NUM_THREADS" in os.environ:
+    try:
+        cv2.setNumThreads(int(os.environ["OMP_NUM_THREADS"]))
+    except Exception:
+        pass
 
 
 def robust_fill_holes(mesh, max_hole_perimeter: float = 1e-1):
