@@ -4,6 +4,7 @@ import gc
 
 import torch
 
+import app_state
 from utilities.logger import get_logger
 import utilities.postprocess # This automatically registers the monkey patch for o_voxel.postprocess.to_glb
 
@@ -18,25 +19,44 @@ def aggressive_gpu_cleanup():
     gc.collect()
     gc.collect()
 
-    if torch.cuda.is_available():
-        try:
-            # Synchronize to ensure all operations complete.
-            torch.cuda.synchronize()
+    if not torch.cuda.is_available():
+        return
 
-            # Clear the CUDA allocator cache.
-            torch.cuda.empty_cache()
+    if app_state.cuda_context_poisoned:
+        # The CUDA context already hit an illegal-memory-access/device-side-assert
+        # error somewhere in this process. Every CUDA call from here on is
+        # undefined behavior -- calling torch.cuda.synchronize() on a poisoned
+        # context has been observed to hang the whole process in an unkillable
+        # kernel wait (D state) instead of failing cleanly. Skip all further CUDA
+        # calls; the process is being torn down and restarted fresh instead.
+        return
 
-            # Collect IPC handles that are no longer needed.
-            torch.cuda.ipc_collect()
+    try:
+        # Synchronize to ensure all operations complete.
+        torch.cuda.synchronize()
 
-            # Synchronize again after cleanup.
-            torch.cuda.synchronize()
+        # Clear the CUDA allocator cache.
+        torch.cuda.empty_cache()
 
-            # Reset peak memory stats for fresh tracking.
-            torch.cuda.reset_peak_memory_stats()
+        # Collect IPC handles that are no longer needed.
+        torch.cuda.ipc_collect()
 
-        except Exception as exc:
-            logger.warning(f"GPU cleanup error: {exc}")
+        # Synchronize again after cleanup.
+        torch.cuda.synchronize()
+
+        # Reset peak memory stats for fresh tracking.
+        torch.cuda.reset_peak_memory_stats()
+
+    except Exception as exc:
+        logger.warning(f"GPU cleanup error: {exc}")
+
+        exc_str = str(exc).lower()
+        if "illegal memory access" in exc_str or "device-side assert" in exc_str:
+            logger.critical(
+                "CUDA context poisoned during cleanup -- disabling further GPU "
+                "cleanup calls in this process until it restarts."
+            )
+            app_state.cuda_context_poisoned = True
 
 
 def clean_mesh(vertices: torch.Tensor, faces: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

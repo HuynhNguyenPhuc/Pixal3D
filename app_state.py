@@ -45,3 +45,12 @@ needs_subprocess_restart: bool = False
 
 # Tracks consecutive CUDA OOM failures across tasks.
 consecutive_cuda_oom_count: int = 0
+
+# Set once this process has seen a CUDA "illegal memory access" or "device-side
+# assert" error. Per NVIDIA's own docs, every CUDA call after such an error is
+# undefined behavior for the rest of the process -- in practice this has hung the
+# whole process in an unkillable kernel wait (D state) rather than erroring
+# cleanly. Once set, utilities.gpu.aggressive_gpu_cleanup() refuses to issue any
+# further CUDA calls, so the process can exit its consumer loop and let the
+# watchdog restart it fresh instead of wedging.
+cuda_context_poisoned: bool = False

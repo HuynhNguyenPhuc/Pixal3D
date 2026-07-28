@@ -109,25 +109,3 @@ MAX_JOBS_PER_WORKER = int(os.getenv("MAX_JOBS_PER_WORKER", "100"))
 MAX_CONSECUTIVE_CUDA_OOM = int(os.getenv("MAX_CONSECUTIVE_CUDA_OOM", "2"))
 VRAM_FRAGMENTATION_THRESHOLD = float(os.getenv("VRAM_FRAGMENTATION_THRESHOLD", "0.85"))
 
-# ── Proactive Mesh Simplification (VRAM Safeguards) ──────────────────────────
-# Threshold: If mesh exceeds this number of faces, proactively decimate it on CPU
-# first to prevent cuMesh BVH building from crashing the GPU.
-# Lowered from 8,000,000: a 9.2M-face mesh reaching mesh export reproducibly
-# corrupted the CUDA context (illegal memory access) inside the UV-atlas/BVH
-# step. Triggering simplification earlier costs nothing for normal meshes --
-# it only changes behavior for meshes that are already this dense.
-SIMPLIFICATION_THRESHOLD_FACES = int(os.getenv("SIMPLIFICATION_THRESHOLD_FACES", "5000000"))
-# Target: The optimized face density to target when proactively decimating.
-# 4,000,000 faces is mathematically the ideal detail cap for a 1536^3 voxel grid.
-SIMPLIFICATION_TARGET_FACES = int(os.getenv("SIMPLIFICATION_TARGET_FACES", "4000000"))
-# Hard ceiling: no mesh may reach the mesh-export call above this face count,
-# regardless of SIMPLIFICATION_THRESHOLD_FACES/TARGET_FACES configuration or
-# whether proactive simplification succeeded. This is deliberately NOT purely
-# env-driven -- it's clamped so a misconfigured or missing threshold upstream
-# can never silently let an oversized, crash-prone mesh through unchecked.
-# See worker/model.py's pre-export face-count gate.
-MESH_HARD_FACE_CEILING = min(
-    int(os.getenv("MESH_HARD_FACE_CEILING", "6000000")),
-    9_000_000,
-)
-

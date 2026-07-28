@@ -260,6 +260,10 @@ def run_worker(
         if is_cuda_related and not is_cuda_out_of_memory(exc):
             logger.critical(f"Fatal CUDA/CuMesh error: {error_msg}. Flagging worker subprocess restart.")
             app_state.needs_subprocess_restart = True
+            # The CUDA context is corrupted from here on -- set this before any further
+            # cleanup call (including the finally block below, and any already queued up
+            # the call stack in model.py) has a chance to touch CUDA again and hang.
+            app_state.cuda_context_poisoned = True
 
         # Classify the error to determine whether it is retriable or resource-related.
         classified = classify_task_error(exc, params)
