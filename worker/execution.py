@@ -18,7 +18,7 @@ from broker.state import (
     set_status_in_redis,
 )
 from utilities.cleanup import cleanup_task_files
-from utilities.error_handling import classify_task_error
+from utilities.error_handling import classify_task_error, is_cuda_out_of_memory
 from utilities.gcloud import convert_to_gcs_url, upload_blob
 from utilities.gpu import aggressive_gpu_cleanup
 from utilities.logger import get_logger
@@ -256,7 +256,8 @@ def run_worker(
         traceback.print_exc()
 
         exc_str = error_msg.lower()
-        if (("cuda error" in exc_str or "cumesh" in exc_str) and "out of memory" not in exc_str) or "illegal memory access" in exc_str or "device-side assertion" in exc_str:
+        is_cuda_related = "cuda error" in exc_str or "cumesh" in exc_str or "illegal memory access" in exc_str or "device-side assert" in exc_str
+        if is_cuda_related and not is_cuda_out_of_memory(exc):
             logger.critical(f"Fatal CUDA/CuMesh error: {error_msg}. Flagging worker subprocess restart.")
             app_state.needs_subprocess_restart = True
 

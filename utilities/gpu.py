@@ -194,6 +194,5 @@ def simplify_mesh(vertices: torch.Tensor, faces: torch.Tensor, target_faces: int
             aggressive_gpu_cleanup()
         except BaseException:
             pass
-            
-        raise e
 
+        raise e

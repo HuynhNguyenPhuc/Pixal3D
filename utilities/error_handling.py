@@ -1,5 +1,37 @@
 """Error classification helpers for task execution."""
 
+import torch
+
+
+def is_cuda_out_of_memory(exc: BaseException) -> bool:
+    """
+    True only for genuinely recoverable CUDA/CuMesh out-of-memory failures.
+
+    Illegal memory access and device-side assert errors mean the CUDA context
+    itself is corrupted -- every subsequent CUDA call in the process is
+    undefined behavior until the process is torn down. They must never be
+    treated as OOM (cleanup-and-retry cannot recover from them), even though
+    their message text also contains "cuda error".
+
+    Args:
+        exc (BaseException): The failure raised during a CUDA/CuMesh operation.
+
+    Returns:
+        bool: True if this is a recoverable CUDA/CuMesh out-of-memory error.
+    """
+    normalized = str(exc).lower()
+
+    if "illegal memory access" in normalized or "device-side assert" in normalized:
+        return False
+
+    return (
+        isinstance(exc, torch.OutOfMemoryError)
+        or "cuda out of memory" in normalized
+        or ("cuda error" in normalized and "out of memory" in normalized)
+        or ("cumesh" in normalized and "out of memory" in normalized)
+        or ("error code: 2" in normalized and "out of memory" in normalized)
+    )
+
 
 def classify_task_error(exc: Exception, params: dict | None = None) -> dict:
     """
@@ -15,18 +47,8 @@ def classify_task_error(exc: Exception, params: dict | None = None) -> dict:
     del params
 
     message = str(exc)
-    normalized = message.lower()
 
-    # CUDA and CuMesh tend to surface OOM failures through slightly different
-    # strings, so keep the matcher broad and operational rather than exact.
-    is_cuda_oom = (
-        ("cuda error" in normalized and "out of memory" in normalized)
-        or ("cumesh" in normalized and "out of memory" in normalized)
-        or ("error code: 2" in normalized and "out of memory" in normalized)
-        or ("cuda out of memory" in normalized)
-    )
-
-    if is_cuda_oom:
+    if is_cuda_out_of_memory(exc):
         return {
             "message": message,
             "error_code": "CUDA_OOM",
