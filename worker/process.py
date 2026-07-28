@@ -31,11 +31,14 @@ def start_worker_process() -> bool:
         app_state.worker_ready_event = mp.Event()
         app_state.worker_ready = False
 
-        # Define the worker subprocess.
+        # Define the worker subprocess. Not daemonic: it must be able to spawn its
+        # own child process for isolated GLB export (multiprocessing forbids daemonic
+        # processes from having children). Explicit terminate/join on shutdown and
+        # restart is already handled by utilities.signal_handlers and restart_worker_process.
         proc = mp.Process(
             target=run_worker_subprocess,
             args=(app_state.worker_initialization_args, app_state.worker_ready_event),
-            daemon=True,
+            daemon=False,
         )
 
         # Start the worker subprocess.
