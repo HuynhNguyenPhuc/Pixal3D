@@ -73,6 +73,7 @@ def _export_process_entry(
         result_queue (mp.Queue): Multiprocessing queue to return result or error payload.
     """
     try:
+        import utilities.postprocess  # Register monkey-patch for o_voxel.postprocess.to_glb
         import o_voxel.postprocess
 
         # --- Device Setup --- #
