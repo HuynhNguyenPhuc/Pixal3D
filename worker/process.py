@@ -31,14 +31,11 @@ def start_worker_process() -> bool:
         app_state.worker_ready_event = mp.Event()
         app_state.worker_ready = False
 
-        # Define the worker subprocess. Not daemonic: it must be able to spawn its
-        # own child process for isolated GLB export (multiprocessing forbids daemonic
-        # processes from having children). Explicit terminate/join on shutdown and
-        # restart is already handled by utilities.signal_handlers and restart_worker_process.
+        # Define the worker subprocess.
         proc = mp.Process(
             target=run_worker_subprocess,
             args=(app_state.worker_initialization_args, app_state.worker_ready_event),
-            daemon=False,
+            daemon=True,
         )
 
         # Start the worker subprocess.
@@ -126,17 +123,14 @@ def run_worker_subprocess(worker_args: dict, ready_event):
     """
     # Cap OpenMP/MKL/OpenBLAS/numexpr thread pools to the pod's actual CPU quota
     # *before* torch/cv2/numpy get imported (they size their thread pools at import
-    #/first-use time from these env vars). Must happen here, not just in config.py,
-    # because the isolated export child (worker/exporter.py) is a fresh `spawn`
-    # interpreter that only inherits os.environ, not already-imported Python state.
+    # /first-use time from these env vars).
     cpu_threads = str(config.WORKER_CPU_THREAD_LIMIT)
     for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
         os.environ[var] = cpu_threads
 
-    # Lower this subprocess's OS scheduling priority (and, by inheritance, that of the
-    # isolated GLB export child it later spawns). Under full CPU contention this lets the
-    # kernel scheduler favor the main API process's event loop, so the lightweight /health
-    # liveness probe still gets serviced instead of the pod being SIGTERM'd as "hung".
+    # Lower this subprocess's OS scheduling priority. Under full CPU contention this lets
+    # the kernel scheduler favor the main API process's event loop, so the lightweight
+    # /health liveness probe still gets serviced instead of the pod being SIGTERM'd as "hung".
     try:
         os.nice(10)
     except OSError as exc:
@@ -148,7 +142,7 @@ def run_worker_subprocess(worker_args: dict, ready_event):
     # Ensure the save directory exists.
     os.makedirs(config.SAVE_DIR, exist_ok=True)
 
-    
+
     # Set worker and consumer IDs for this subprocess.
     # We include the hostname to avoid collisions across multiple pods.
     import socket

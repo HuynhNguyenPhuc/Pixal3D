@@ -10,13 +10,12 @@ from PIL import Image
 
 import torch
 
-import config
 from pixal3d.pipelines import Pixal3DImageTo3DPipeline
 from inference import get_camera_params_wild_moge
 from utilities.image import convert_to_pil_image
 from utilities.logger import get_logger
 from utilities.gpu import aggressive_gpu_cleanup
-from worker.exporter import export_glb_isolated
+from worker.exporter import export_glb
 
 
 # Minimal mocks for IMAGE_COND_CONFIGS
@@ -177,8 +176,8 @@ class ModelWorker:
         aggressive_gpu_cleanup()
 
         try:
-            self.logger.info(f"Delegating GLB export to isolated child process for uid={uid}...")
-            glb_bytes = export_glb_isolated(
+            self.logger.info(f"Exporting GLB for uid={uid}...")
+            glb_bytes = export_glb(
                 vertices=mesh.vertices,
                 faces=mesh.faces,
                 attrs=mesh.attrs,
@@ -188,9 +187,8 @@ class ModelWorker:
                 decimation_target=decimation_target,
                 texture_size=texture_size,
                 no_webp=no_webp,
-                timeout_seconds=config.EXPORT_TIMEOUT_SECONDS,
             )
-            self.logger.info(f"Isolated GLB export completed successfully for uid={uid}.")
+            self.logger.info(f"GLB export completed successfully for uid={uid}.")
 
             output_path = os.path.join(self.save_dir, f'{uid}.glb')
             with open(output_path, "wb") as f:
