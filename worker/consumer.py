@@ -42,6 +42,26 @@ logger = get_logger(__name__)
 xautoclaim_supported: bool = True
 
 
+def _entry_age_seconds(entry_id: str) -> Optional[float]:
+    """
+    Best-effort age of a Redis Stream entry, derived from its ID timestamp.
+
+    Redis Stream IDs have the format <ms-timestamp>-<sequence>, so the age
+    can be computed without an extra Redis round-trip.
+
+    Args:
+        entry_id (str): The Redis stream entry ID.
+
+    Returns:
+        Optional[float]: Age of the entry in seconds, or None if unparsable.
+    """
+    try:
+        ms_part = entry_id.split("-", 1)[0]
+        return max(time.time() - int(ms_part) / 1000.0, 0.0)
+    except (ValueError, IndexError):
+        return None
+
+
 def _redis_retry_delay(attempt: int) -> float:
     """
     Return jittered exponential backoff delay for Redis reconnect attempts.
@@ -116,7 +136,13 @@ def task_consumer_daemon() -> None:
             # This provides idempotency: if we crashed after generating but before ACK, the next worker reading this from PEL will see 'completed' and skip.
             existing_status = get_status_from_redis(uid)
             if existing_status and is_terminal_status(existing_status):
-                logger.info(f"Skip task {uid}: already terminal according to Redis status.")
+                age = _entry_age_seconds(entry_id)
+                age_str = f", entry age={age:.0f}s" if age is not None else ""
+                logger.info(
+                    f"Skip task {uid} ({source}): already terminal according to Redis status "
+                    f"(status={existing_status.get('status')}{age_str}). Cleaning up stale stream entry "
+                    f"-- this is not a rejection of a newer submission for the same uid."
+                )
                 ack_and_cleanup_stream_entry(entry_id)
                 return
 

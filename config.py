@@ -42,6 +42,14 @@ EXECUTION_TIMEOUT_SECONDS = int(
 )
 SHUTDOWN_GRACE_PERIOD = int(os.getenv("SHUTDOWN_GRACE_PERIOD", "90"))
 
+# Deliberately shorter than EXECUTION_TIMEOUT_SECONDS: the isolated GLB-export
+# child process (worker/exporter.py) is only the final stage of a task, not
+# the whole task. If its own timeout equalled the full task timeout, a slow
+# export would race the watchdog's task-level timeout, which forces a full
+# worker subprocess restart -- exactly the expensive outcome the isolated
+# exporter exists to avoid.
+EXPORT_TIMEOUT_SECONDS = int(os.getenv("EXPORT_TIMEOUT_SECONDS", "300"))
+
 
 # ── Watchdog / process supervision ───────────────────────────────────────────
 WORKER_WATCHDOG_INTERVAL_SECONDS = int(os.getenv("WORKER_WATCHDOG_INTERVAL_SECONDS", "5"))
@@ -62,8 +70,16 @@ EXEC_LOCK_TTL_SECONDS = int(
 
 
 # ── Pending reclaim ───────────────────────────────────────────────────────────
+# A still-running task is protected from reclaim by its Redis heartbeat
+# (RUNNING_HEARTBEAT_STALE_SECONDS), not by this value -- this only bounds how
+# long a genuinely orphaned entry (e.g. left behind by a hard process crash)
+# sits unclaimed before another worker cleans it up. Previously tied to
+# EXECUTION_TIMEOUT_SECONDS (30 min default), which left crash orphans
+# unclaimed for up to 30 minutes with no added safety benefit. A margin over
+# the heartbeat-stale window, with a low floor, gives fast orphan cleanup
+# while still comfortably outlasting transient heartbeat-write delays.
 PENDING_RECLAIM_MIN_IDLE_MS = int(
-    os.getenv("PENDING_RECLAIM_MIN_IDLE_MS", str(max(EXECUTION_TIMEOUT_SECONDS * 1000, 60000)))
+    os.getenv("PENDING_RECLAIM_MIN_IDLE_MS", str(max(RUNNING_HEARTBEAT_STALE_SECONDS * 1000 * 4, 180000)))
 )
 PENDING_RECLAIM_BATCH_SIZE = int(os.getenv("PENDING_RECLAIM_BATCH_SIZE", "10"))
 
@@ -91,10 +107,24 @@ MAX_CONSECUTIVE_CUDA_OOM = int(os.getenv("MAX_CONSECUTIVE_CUDA_OOM", "2"))
 VRAM_FRAGMENTATION_THRESHOLD = float(os.getenv("VRAM_FRAGMENTATION_THRESHOLD", "0.85"))
 
 # ── Proactive Mesh Simplification (VRAM Safeguards) ──────────────────────────
-# Threshold: If mesh exceeds this number of faces, proactively decimate it on CPU 
+# Threshold: If mesh exceeds this number of faces, proactively decimate it on CPU
 # first to prevent cuMesh BVH building from crashing the GPU.
-SIMPLIFICATION_THRESHOLD_FACES = int(os.getenv("SIMPLIFICATION_THRESHOLD_FACES", "8000000"))
-# Target: The optimized face density to target when proactively decimating. 
+# Lowered from 8,000,000: a 9.2M-face mesh reaching mesh export reproducibly
+# corrupted the CUDA context (illegal memory access) inside the UV-atlas/BVH
+# step. Triggering simplification earlier costs nothing for normal meshes --
+# it only changes behavior for meshes that are already this dense.
+SIMPLIFICATION_THRESHOLD_FACES = int(os.getenv("SIMPLIFICATION_THRESHOLD_FACES", "5000000"))
+# Target: The optimized face density to target when proactively decimating.
 # 4,000,000 faces is mathematically the ideal detail cap for a 1536^3 voxel grid.
 SIMPLIFICATION_TARGET_FACES = int(os.getenv("SIMPLIFICATION_TARGET_FACES", "4000000"))
+# Hard ceiling: no mesh may reach the mesh-export call above this face count,
+# regardless of SIMPLIFICATION_THRESHOLD_FACES/TARGET_FACES configuration or
+# whether proactive simplification succeeded. This is deliberately NOT purely
+# env-driven -- it's clamped so a misconfigured or missing threshold upstream
+# can never silently let an oversized, crash-prone mesh through unchecked.
+# See worker/model.py's pre-export face-count gate.
+MESH_HARD_FACE_CEILING = min(
+    int(os.getenv("MESH_HARD_FACE_CEILING", "6000000")),
+    9_000_000,
+)
 
