@@ -87,8 +87,8 @@ def robust_to_glb(
     remesh_band: float = 1,
     remesh_project: float = 0.9,
     mesh_cluster_threshold_cone_half_angle_rad=np.radians(90.0),
-    mesh_cluster_refine_iterations=0,
-    mesh_cluster_global_iterations=1,
+    mesh_cluster_refine_iterations=100,
+    mesh_cluster_global_iterations=3,
     mesh_cluster_smooth_strength=1,
     verbose: bool = False,
     use_tqdm: bool = False,
@@ -328,6 +328,29 @@ def robust_to_glb(
         pbar.update(1)
     if verbose:
         print("Done")
+
+    # ------------------------------------------------------------------------
+    # Step 5b: Selective Position Smoothing (decimation-noise cleanup)
+    # ------------------------------------------------------------------------
+    # cu_mesh.simplify() above can leave small-scale positional noise behind
+    # (JeffreyXiang/CuMesh#28) that shows up as a visible shading ripple once
+    # vertex normals are computed on it in Step 6. Smooth only the vertices
+    # where that noise is actually measured; everything else (sharp edges,
+    # fold lines, facial features) is left untouched. Best-effort: any failure
+    # here just proceeds with the unsmoothed mesh rather than aborting export.
+    try:
+        from utilities.gpu import smooth_noisy_vertices
+
+        smooth_verts, smooth_faces = mesh.read()
+        smoothed = smooth_noisy_vertices(smooth_verts, smooth_faces)
+        mesh.init(smoothed, smooth_faces)
+
+        if verbose:
+            print(f"After decimation-noise smoothing: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
+
+    except BaseException as smooth_err:
+        print(f"[Warning] Selective vertex smoothing failed: {smooth_err}. Proceeding with unsmoothed mesh.")
+        local_cleanup()
 
     # ------------------------------------------------------------------------
     # Step 6: UV Atlas Chart Generation & Parameterization (uv_unwrap)
